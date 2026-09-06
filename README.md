@@ -1,16 +1,71 @@
+# README.md
 ## Hi there 👋
-
 <!--
-**unfinished-summer/unfinished-summer** is a ✨ _special_ ✨ repository because its `README.md` (this file) appears on your GitHub profile.
-
-Here are some ideas to get you started:
-
-- 🔭 I’m currently working on ...
-- 🌱 I’m currently learning ...
-- 👯 I’m looking to collaborate on ...
-- 🤔 I’m looking for help with ...
-- 💬 Ask me about ...
-- 📫 How to reach me: ...
-- 😄 Pronouns: ...
-- ⚡ Fun fact: ...
+同名个人仓库，仅存放各类开发项目踩坑文档，不包含任何项目源代码
+所有故障记录分类归档在 docs 目录下，便于后续查阅复用
 -->
+### 仓库介绍
+本仓库是个人全开发场景踩坑归档库，**只存储各类项目故障记录文档，无任何业务源码、工程文件**。
+收录内容涵盖 C++ 图形可视化、前端、算法、编译环境、包管理器、多线程、VS 开发环境等各类开发踩坑，用于复盘、避坑、查阅解决方案。
+
+### 仓库目录结构
+```
+.
+├── docs/
+│   ├── sort-raylib/
+│   │   └── bug_record.md   # C++ Raylib 排序算法可视化项目完整踩坑记录
+│   ├── 其他项目文件夹/      # 后续新增项目踩坑单独建文件夹存放
+│   └── 通用环境踩坑.md      # 跨项目通用环境、工具类故障记录
+├── .gitignore               # 仓库忽略规则
+└── README.md                # 仓库总介绍
+```
+
+### 当前已收录文档简介
+#### 1. sort-raylib 排序可视化项目文档
+文档路径：`docs/sort-raylib/bug_record.md`
+1. 项目：C++ + Raylib 排序算法可视化工具，支持冒泡/选择/插入/快排/归并动画，多线程渲染
+2. 编译环境：Visual Studio 2026 MSVC x64 Debug
+3. 核心故障：vcpkg 打包 raylib 6.x 与 VS2026 MSVC 运行不兼容（白屏、窗口卡死、鼠标转圈）
+4. 配套内容：核心根因、无卸载vcpkg的修复方案、四类连锁衍生故障、完整开发总结
+
+### 仓库使用规范
+1. 每个新项目踩坑单独在 `docs/` 下新建同名文件夹，内部存放该项目专属 `bug_record.md`；
+2. 通用、跨项目的环境/工具故障单独写通用文档，不归属单一项目；
+3. 文档统一格式：项目背景、环境依赖、核心坑、衍生坑、根因、解决方案、经验总结；
+4. 仓库不提交任何代码、解决方案、编译产物，仅保留 Markdown 文字记录。
+
+### 适用人群
+- C++ / Windows MSVC / Raylib 图形开发
+- vcpkg 包管理器环境配置
+- 多线程动画、可视化程序开发
+- 各类编译、链接、运行时故障排查参考
+
+### .gitignore
+```gitignore
+# 工程、源码、编译产物（本仓库不存放，全部忽略）
+*.sln
+*.vcxproj
+*.vcxproj.filters
+x64/
+x86/
+Debug/
+Release/
+*.exe
+*.dll
+*.obj
+*.pdb
+*.ilk
+*.a
+*.lib
+
+# Markdown 临时缓存文件
+*.md~
+
+# 系统隐藏缓存文件
+.DS_Store
+Thumbs.db
+```
+
+## 文档快速跳转
+- [Raylib排序可视化项目踩坑文档](./docs/sort-raylib/bug_record.md)
+- 后续新增项目文档会在此处补充链接
