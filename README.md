@@ -41,30 +41,7 @@
 - 各类编译、链接、运行时故障排查参考
 
 ### .gitignore
-```gitignore
-# 工程、源码、编译产物（本仓库不存放，全部忽略）
-*.sln
-*.vcxproj
-*.vcxproj.filters
-x64/
-x86/
-Debug/
-Release/
-*.exe
-*.dll
-*.obj
-*.pdb
-*.ilk
-*.a
-*.lib
-
-# Markdown 临时缓存文件
-*.md~
-
-# 系统隐藏缓存文件
-.DS_Store
-Thumbs.db
-```
+- [.gitignore](.gitignore)
 
 ## 文档快速跳转
 - [Raylib排序可视化项目踩坑文档](./docs/sort-raylib/bug_record.md)
