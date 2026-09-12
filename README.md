@@ -21,6 +21,7 @@
 │   ├── sort-raylib/
 │   │   └── bug_record.md   # C++ Raylib 排序算法可视化项目完整踩坑记录
 │   ├── 通用环境踩坑.md      # 跨项目通用环境、工具类故障记录
+│   ├── file_sorter实操题经验.md  # file_sorter 项目递进式实操题知识点与经验总结
 │   └── 其他项目文件夹/      # 后续新增项目踩坑单独建文件夹存放
 ├── .gitignore               # 仓库忽略规则
 └── README.md                # 仓库总介绍
@@ -41,6 +42,12 @@
 3. 源码编码与中文乱码（UTF-8 BOM / /utf-8 编译选项）
 4. .gitignore 误配置导致所有文件被忽略（.gitignore vs .gitattributes 语法区分）
 
+#### 3. file_sorter 实操题经验总结
+文档路径：`docs/file_sorter实操题经验.md`
+1. 题 1：FileInfo 信息打印器 — 格式化函数职责分离（ostringstream 返回字符串）、C++ 时间类型转换 4 步走（file_time_type → time_point → time_t → tm → 字符串）、static_cast vs C 风格强制转换
+2. 题 2：分级日志系统（待完成）
+3. 后续每完成一题追加一节，记录知识点、踩坑和经验
+
 ### 仓库使用规范
 1. 每个新项目踩坑单独在 `docs/` 下新建同名文件夹，内部存放该项目专属 `bug_record.md`；
 2. 通用、跨项目的环境/工具故障单独写通用文档，不归属单一项目；
@@ -59,4 +66,5 @@
 ## 文档快速跳转
 - [Raylib排序可视化项目踩坑文档](./docs/sort-raylib/bug_record.md)
 - [通用环境踩坑记录](./docs/通用环境踩坑.md)
+- [file_sorter 实操题经验总结](./docs/file_sorter实操题经验.md)
 - 后续新增项目文档会在此处补充链接
