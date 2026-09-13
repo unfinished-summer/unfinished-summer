@@ -648,3 +648,209 @@ my_program.exe > result.txt 2> app.log
 ```
 
 （隐藏文件如 `.gitignore` 被跳过，不显示）
+
+---
+
+## 题 4：后缀分类器
+
+### 题目目标
+实现一个后缀分类函数，根据文件后缀将文件分类到 7 大类之一（IMAGE/DOCUMENT/VIDEO/AUDIO/ARCHIVE/PROGRAM/OTHER）。分类规则集中管理，便于后续扩展和维护。
+
+### 知识点 1：后缀标准化（去点 + 转小写）
+
+#### 现象
+用户传入的后缀可能是 `.PDF`、`pdf`、`.Pdf`、`PDF` 等各种形式，如果直接拿去查表，`.PDF` 和 `pdf` 会被当成两个不同的键，导致匹配失败。
+
+#### 排查与原因
+- 分类规则表里的键是统一格式（小写、无点，如 `pdf`）
+- 输入后缀的格式不统一：可能带点、可能大写、可能混合大小写
+- 不标准化就直接查表，会因为格式不匹配导致查找失败
+- 标准化是数据清洗的第一步，确保输入和规则表的键格式一致
+
+#### 解决方案
+`normalizeExtension` 函数做两件事：
+1. 去掉开头的 `.`（如果有）
+2. 全部转小写
+
+```cpp
+std::string normalizeExtension(const std::string& ext) {
+    std::string result = ext;
+    // 去掉开头的点
+    if (!result.empty() && result[0] == '.') {
+        result = result.substr(1);
+    }
+    // 全部转小写
+    for (char& ch : result) {
+        ch = std::tolower(static_cast<unsigned char>(ch));
+    }
+    return result;
+}
+```
+
+#### 经验总结
+- 标准化是数据处理的第一步，确保输入格式统一后再进行匹配/比较
+- `std::tolower` 的参数必须转 `unsigned char`，否则负数字符（如中文）会导致未定义行为
+- `substr` 返回新字符串，不会修改原字符串，必须赋值回去
+- 空字符串要安全处理：先判空再取 `[0]`，避免越界访问
+- 标准化函数应纯函数化：输入相同，输出一定相同，无副作用
+
+---
+
+### 知识点 2：分类规则表集中管理（unordered_map + static const 单例）
+
+#### 现象
+如果用一堆 if-else 判断后缀，代码冗长、难以维护、新增后缀要改逻辑代码。
+
+#### 排查与原因
+- if-else 写法：每新增一个后缀就要加一个 `else if`，逻辑和数据混在一起
+- 后缀有几十个，if-else 会写几十行，可读性差
+- 分类规则是**数据**，不是**逻辑**，应该和逻辑分离
+- 用 map 存储后缀→分类的映射，数据和逻辑分离，新增后缀只改数据不改逻辑
+
+#### 解决方案
+用 `std::unordered_map<std::string, FileCategory>` 集中管理所有后缀映射，用 `static const` 局部变量实现单例：
+
+```cpp
+const std::unordered_map<std::string, FileCategory>& getCategoryMap() {
+    static const std::unordered_map<std::string, FileCategory> categoryMap = {
+        {"jpg", FileCategory::IMAGE}, {"jpeg", FileCategory::IMAGE},
+        {"pdf", FileCategory::DOCUMENT}, {"doc", FileCategory::DOCUMENT},
+        // ... 其他后缀
+    };
+    return categoryMap;
+}
+```
+
+#### 经验总结
+- 数据和逻辑分离：分类规则是数据，用 map 存储；分类逻辑是代码，用 find 查表
+- `static const` 局部变量是 C++ 单例的最佳实践：只初始化一次、不可修改、作用域局部、延迟初始化、线程安全（C++11 起）
+- `unordered_map` 平均 O(1) 查找，比 if-else 链（O(n)）快得多
+- 新增后缀只改 map 数据，不改逻辑代码，符合开闭原则（对扩展开放，对修改关闭）
+- 返回 `const` 引用，调用方不能修改规则表，保证数据安全
+
+---
+
+### 知识点 3：enum class 转中文（switch）
+
+#### 现象
+分类结果是 `FileCategory` 枚举值，需要转换成中文显示给用户（如"图片"、"文档"）。
+
+#### 排查与原因
+- `enum class` 是作用域枚举，不会隐式转换为整数，不能直接用数组下标
+- 枚举值和中文名称的映射是固定的，用 switch 最清晰
+- switch 的每个 case 对应一个枚举值，返回对应的中文，default 处理未知值
+
+#### 解决方案
+```cpp
+std::string categoryToChinese(FileCategory category) {
+    switch (category) {
+    case FileCategory::IMAGE:    return "图片";
+    case FileCategory::DOCUMENT: return "文档";
+    case FileCategory::VIDEO:    return "视频";
+    case FileCategory::AUDIO:    return "音频";
+    case FileCategory::ARCHIVE:  return "压缩包";
+    case FileCategory::PROGRAM:  return "程序/代码";
+    case FileCategory::OTHER:    return "其他";
+    default:                      return "未知";
+    }
+}
+```
+
+#### 经验总结
+- enum class 转字符串用 switch 最清晰，每个 case 一目了然
+- 必须加 `default` 处理未知枚举值，避免 switch 没有返回值导致未定义行为
+- 也可以用 `std::unordered_map<FileCategory, std::string>` 实现，但 switch 性能更好（编译器可能优化为跳转表）
+- 枚举转字符串是常见需求，建议每个枚举都配套一个 `xxxToString` 函数
+- 题 2 的 `levelToString` 也是同样的模式，可复用
+
+---
+
+### 知识点 4：默认值处理（未知后缀返回 OTHER）
+
+#### 现象
+用户文件的后缀千奇百怪，不可能全部预定义在规则表里，未知后缀需要有合理的默认处理。
+
+#### 排查与原因
+- 规则表只覆盖常见后缀，未知后缀（如 `.xyz`、`.unknown`）查表会失败
+- 如果不处理查找失败，可能返回无效枚举值或崩溃
+- `OTHER` 分类就是为未知后缀准备的"兜底分类"
+- `find` 失败时返回 `end()` 迭代器，需要判断后返回默认值
+
+#### 解决方案
+```cpp
+FileCategory classifyByExtension(const std::string& ext) {
+    std::string normalized = normalizeExtension(ext);
+    const auto& categoryMap = getCategoryMap();
+    auto it = categoryMap.find(normalized);
+    if (it != categoryMap.end()) {
+        return it->second;  // 找到，返回对应分类
+    }
+    return FileCategory::OTHER;  // 没找到，返回默认分类
+}
+```
+
+#### 经验总结
+- 查表操作必须处理"没找到"的情况，不能假设输入一定在表里
+- `end()` 是哨兵值，表示"没找到"，`it != end()` 是标准的查找成功判断
+- 默认值处理保证函数总有合法返回值，避免崩溃或无效状态
+- `OTHER` 分类是兜底设计，所有无法分类的文件都归入此类
+- 边界情况（空后缀、未知后缀、超长后缀）都应落入默认处理，不要特殊判断
+
+---
+
+### 知识点 5：char 是基本类型，没有成员方法
+
+#### 现象
+写 `for (auto& ch : result) { ch = ch.tolower(); }` 报编译错误，提示 `char` 没有 `tolower` 方法。
+
+#### 排查与原因
+- `ch` 的类型是 `char`，C++ 的基本类型（int、char、float 等）不是对象，没有成员方法
+- `tolower` 是 C 标准库函数（`<cctype>`），不是 `char` 的方法
+- 基本类型的操作都通过函数或运算符完成，不能用 `.` 调用方法
+- 只有类类型（class/struct）的对象才能用 `.` 调用成员方法
+
+#### 解决方案
+```cpp
+for (char& ch : result) {
+    ch = std::tolower(static_cast<unsigned char>(ch));  // ✅ 用标准库函数
+}
+```
+
+#### 经验总结
+- C++ 基本类型（int/char/float/double/bool 等）不是对象，没有成员方法
+- 字符操作（转大小写、判断字母/数字等）用 `<cctype>` 里的标准库函数：`tolower`、`toupper`、`isalpha`、`isdigit`、`isspace` 等
+- 不要把 Java/C# 的"万物皆对象"思维带到 C++，C++ 基本类型就是纯数据
+- 范围 for 循环 `for (char& ch : result)` 中 `ch` 是引用，修改 `ch` 会修改原字符串
+
+---
+
+### 踩坑记录
+
+1. **`normalizeExtension` 逻辑写反**：`if (!result.empty()) return result;` 导致非空后缀直接返回，去点和转小写根本执行不到。应该是 `if (result.empty()) return result;`，或者直接删掉这行（空字符串后续操作也安全）。
+2. **`substr` 没赋值**：`result.substr(1)` 返回新字符串，不会修改原 `result`，必须写成 `result = result.substr(1);`。
+3. **`char.tolower()` 错误**：`char` 是基本类型，没有成员方法，要用 `std::tolower(ch)` 标准库函数。
+4. **`std::tolower` 参数没转 `unsigned char`**：负数字符（如中文）传入会导致未定义行为，必须写 `std::tolower(static_cast<unsigned char>(ch))`。
+5. **规则表用 if-else 链**：几十个后缀写 if-else 冗长难维护，应该用 `unordered_map` 集中管理，数据和逻辑分离。
+6. **`find` 失败没处理**：查表后直接 `return it->second`，没判断 `it != end()`，未知后缀会解引用无效迭代器导致崩溃。
+
+---
+
+### 最终验证输出
+
+```
+===== 后缀分类测试 =====
+
+原始后缀: .pdf  →  标准化: pdf  →  分类: 文档
+原始后缀: PDF   →  标准化: pdf  →  分类: 文档
+原始后缀: .JPG  →  标准化: jpg  →  分类: 图片
+原始后缀: png   →  标准化: png  →  分类: 图片
+原始后缀: .MP4  →  标准化: mp4  →  分类: 视频
+原始后缀: mp3   →  标准化: mp3  →  分类: 音频
+原始后缀: .zip  →  标准化: zip  →  分类: 压缩包
+原始后缀: cpp   →  标准化: cpp  →  分类: 程序/代码
+原始后缀: .exe  →  标准化: exe  →  分类: 程序/代码
+原始后缀: .unknown  →  标准化: unknown  →  分类: 其他
+原始后缀: .Md   →  标准化: md   →  分类: 文档
+原始后缀: .HTML →  标准化: html →  分类: 程序/代码
+原始后缀: (空)  →  标准化: (空) →  分类: 其他
+```
