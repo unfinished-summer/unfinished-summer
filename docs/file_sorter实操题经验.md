@@ -854,3 +854,295 @@ for (char& ch : result) {
 原始后缀: .HTML →  标准化: html →  分类: 程序/代码
 原始后缀: (空)  →  标准化: (空) →  分类: 其他
 ```
+
+---
+
+## 题 5：文件移动器
+
+### 题目目标
+实现文件移动功能：根据文件分类创建对应文件夹，把文件移动进去，处理重名冲突，捕获移动异常。这是 file_sorter 项目的核心动作模块。
+
+### 知识点 1：fs::create_directories 递归创建目录
+
+#### 现象
+需要确保目标分类文件夹存在，不存在则创建，可能需要创建多级目录（如 `target/文档/子文件夹`）。
+
+#### 排查与原因
+- `fs::create_directory(path)` 只能创建单级目录，父目录不存在时报错
+- `fs::create_directories(path)` 可以递归创建多级目录，父目录不存在时自动创建
+- 目录已存在时，`create_directories` 返回 `false`，不报错
+- 不需要先 `fs::exists` 判断再创建，直接调用 `create_directories` 即可，它内部会处理已存在的情况
+
+#### 解决方案
+```cpp
+void ensureDirectory(const fs::path& dirPath) {
+    fs::create_directories(dirPath);  // 递归创建，已存在不报错
+}
+```
+
+#### 经验总结
+- `create_directories`（带 s）递归创建多级目录，`create_directory`（不带 s）只创建单级
+- 已存在时返回 `false` 不抛异常，不需要提前 `exists` 判断
+- 这是幂等操作：调用多次结果一样，不会因为已存在而报错
+- file_sorter 项目中 mover 模块移动文件前必须先确保分类文件夹存在
+
+---
+
+### 知识点 2：重名处理逻辑（stem/ext 拆解 + while 循环）
+
+#### 现象
+目标文件夹已存在同名文件时，直接移动会覆盖原文件，需要自动改名（`报告.pdf` → `报告(1).pdf` → `报告(2).pdf`）。
+
+#### 排查与原因
+- `fs::rename` 移动文件时，如果目标已存在，在 Windows 上会覆盖原文件（有风险）
+- 需要在移动前检查目标是否存在，存在则自动生成不重名的新路径
+- `fs::path` 提供了 `stem()`（文件名不含后缀）和 `extension()`（后缀含点）方法，方便拆解和重组文件名
+- 用计数器从 1 开始循环，拼 `(1)`、`(2)`...，直到找到不存在的路径
+
+#### 解决方案
+```cpp
+fs::path generateUniquePath(const fs::path& targetPath) {
+    if (!fs::exists(targetPath)) {
+        return targetPath;  // 不存在，直接用
+    }
+    fs::path parent = targetPath.parent_path();
+    fs::path stem = targetPath.stem();        // "报告"
+    fs::path ext = targetPath.extension();     // ".pdf"
+    int counter = 1;
+    while (true) {
+        fs::path newName = stem.string() + "(" + std::to_string(counter) + ")" + ext.string();
+        fs::path newPath = parent / newName;
+        if (!fs::exists(newPath)) {
+            return newPath;  // 找到了不重名的
+        }
+        counter++;
+    }
+}
+```
+
+#### 经验总结
+- `stem()` 返回不含后缀的文件名，`extension()` 返回含点的后缀，`parent_path()` 返回所在目录
+- 重名处理是文件管理器的标准功能，Windows 资源管理器复制文件时也是 `副本 (1)`、`副本 (2)` 命名
+- 循环终止条件：找到不存在的路径就返回，理论上不会无限循环（磁盘文件数有限）
+- 计数器从 1 开始，不是 0，符合用户习惯（`报告(1).pdf` 而不是 `报告(0).pdf`）
+
+---
+
+### 知识点 3：字符串拼接中的隐式转换（重点）
+
+#### 现象
+`generateUniquePath` 中有一行代码涉及多次隐式转换：
+```cpp
+fs::path newName = stem.string() + "(" + std::to_string(counter) + ")" + ext.string();
+```
+
+#### 排查与原因
+这行代码从左到右逐步执行，每一步都有隐式类型转换：
+
+| 步骤 | 表达式 | 左操作数类型 | 右操作数类型 | 结果类型 | 隐式转换 |
+|---|---|---|---|---|---|
+| 1 | `stem.string() + "("` | `std::string` | `const char[2]` | `std::string` | 数组隐式转指针 `const char*`，调用 `operator+(string, const char*)` |
+| 2 | 结果 + `std::to_string(counter)` | `std::string` | `std::string` | `std::string` | 调用 `operator+(string, string)` |
+| 3 | 结果 + `")"` | `std::string` | `const char[2]` | `std::string` | 同步骤 1 |
+| 4 | 结果 + `ext.string()` | `std::string` | `std::string` | `std::string` | 同步骤 2 |
+| 5 | `fs::path newName = 结果` | - | `std::string` | `fs::path` | `std::string` 隐式调用 `fs::path` 构造函数 |
+
+关键隐式转换点：
+1. **字符串字面量数组 → 指针**：`"("` 是 `const char[2]`，和 `string` 拼接时隐式转换为 `const char*`
+2. **`std::to_string(int)`**：把 `int` 隐式转换为 `std::string`（这是显式函数调用，不是隐式转换，但结果是 string）
+3. **`std::string` → `fs::path`**：赋值时 `std::string` 隐式调用 `fs::path(const std::string&)` 构造函数
+
+#### 编码自洽性分析
+- `stem.string()` 和 `ext.string()` 返回的是 **GBK 编码**的 `std::string`（Windows 上 `fs::path::string()` 用 ANSI 代码页转换）
+- 拼接后的 `std::string` 仍然是 GBK 编码
+- 最后隐式构造 `fs::path` 时，`fs::path(const std::string&)` 按 **ANSI 代码页（GBK）**解读字符串内容
+- **GBK → GBK 自洽**：中文文件名不会乱码
+
+#### 如果用错会怎样
+如果把 `stem.string()` 改成 `stem.u8string()`（返回 UTF-8），拼接后构造 `fs::path` 时按 GBK 解读 UTF-8 字节 → 中文文件名乱码。这就是为什么这里必须用 `.string()`（GBK）而不是 `.u8string()`（UTF-8）。
+
+#### 经验总结
+- C++ 的 `+` 运算符对 `std::string` 有多个重载：`string+string`、`string+const char*`、`const char*+string`，字符串字面量数组会隐式转指针
+- `fs::path` 可以从 `std::string` 隐式构造，但 Windows 上按 ANSI 代码页解读字符串内容
+- 编码自洽是关键：从 `path.string()`（GBK）取出的字符串，构造 `path` 时按 GBK 解读，自洽不乱码
+- 不要混用编码：`u8string()`（UTF-8）取出的字符串不能直接构造 `path`（按 GBK 解读），否则乱码
+- 隐式转换虽然方便，但要清楚每一步的类型变化，特别是涉及编码时
+
+---
+
+### 知识点 4：fs::rename 移动文件
+
+#### 现象
+需要把文件从源路径移动到目标路径，同分区和跨分区行为不同。
+
+#### 排查与原因
+- `fs::rename(oldPath, newPath)` 是移动文件的标准函数
+- **同分区**：只是修改目录项（文件分配表中的文件名/路径），不复制数据，速度极快，是原子操作
+- **跨分区**：先复制文件到目标，再删除源文件，速度慢，不是原子操作（中途失败可能留下半截文件）
+- 目标已存在时，Windows 上 `rename` 会覆盖原文件（Unix/Linux 上也是覆盖），所以需要提前用 `generateUniquePath` 处理重名
+- 源文件不存在、无权限、文件被占用时会抛 `fs::filesystem_error` 异常
+
+#### 解决方案
+```cpp
+fs::rename(file.fullPath, uniquePath);  // 移动文件
+```
+
+#### 经验总结
+- `fs::rename` 是移动文件的标准方式，不是复制（复制用 `fs::copy_file`）
+- 同分区移动是原子操作，速度快；跨分区先复制后删除，速度慢且非原子
+- 移动前必须处理重名（用 `generateUniquePath`），否则会覆盖目标文件
+- `rename` 可能抛异常，必须用 try-catch 包裹，捕获后打日志返回 false
+- file_sorter 项目中 mover 模块的核心动作就是 `fs::rename`
+
+---
+
+### 知识点 5：异常隔离（移动失败不影响整体）
+
+#### 现象
+批量移动文件时，某个文件可能无权限、被占用、源文件不存在，导致整个移动流程崩溃。
+
+#### 排查与原因
+- `fs::rename` 在文件无权限、被占用、源不存在时抛 `fs::filesystem_error`
+- 批量移动中单个失败是常态，不应影响其他文件的移动
+- 和题 3 扫描器的异常隔离是同一个设计原则：try-catch 包裹单个文件操作
+
+#### 解决方案
+```cpp
+bool moveFile(const FileInfo& file, const fs::path& targetRoot) {
+    try {
+        fs::path categoryDir = targetRoot / categoryToChinese(file.category);
+        ensureDirectory(categoryDir);
+        fs::path targetPath = categoryDir / file.fileName;
+        fs::path uniquePath = generateUniquePath(targetPath);
+        fs::rename(file.fullPath, uniquePath);
+        logInfo("移动成功: " + ...);
+        return true;
+    }
+    catch (const std::exception& e) {
+        logError("移动失败: " + ... + " - " + e.what());
+        return false;
+    }
+}
+```
+
+#### 经验总结
+- 批量操作（扫描、移动、复制、删除）中，异常隔离是必须的
+- try-catch 放在单个文件操作外层，不是整个循环外层
+- 捕获后记录日志（文件名 + 错误原因），返回 false 让调用方知道失败
+- 调用方根据返回值统计成功/失败数量，不因为单个失败而终止整体
+- 这是 file_sorter 项目的核心设计原则，scanner、mover、organizer 都遵循
+
+---
+
+### 知识点 6：Windows 编码方案（fs::path + wstring + u8string 三层架构）
+
+#### 现象
+题 5 涉及大量路径操作和中文文件名，需要一套完整的编码方案避免乱码。
+
+#### 排查与原因
+题 5 最终采用的编码方案分三层：
+
+| 层级 | 存储类型 | 编码 | 用途 |
+|---|---|---|---|
+| 路径层 | `fs::path` | 内部 UTF-16 | 完整路径（`fullPath`），直接用于文件操作 |
+| 文件名层 | `std::wstring` | UTF-16 | 文件名（`fileName`）、后缀（`ext`），和 `fs::path` 拼接时零转换 |
+| 显示层 | `std::string`（UTF-8） | UTF-8 | 日志输出、控制台显示，用 `.u8string()` 转换 |
+
+关键转换函数：
+```cpp
+// C++20 下 u8string 不能直接用，需要转成普通 string
+std::string u8toString(const std::u8string& u8str) {
+    return std::string(u8str.begin(), u8str.end());
+}
+
+// 显示时：fs::path → u8string → string
+logInfo("移动成功: " + u8toString(fs::path(file.fileName).u8string()));
+```
+
+#### 为什么 fileName 用 wstring 而不是 string
+- `categoryDir / file.fileName` 拼接时，如果 `fileName` 是 `std::string`（UTF-8），`fs::path` 按 GBK 解读 → 乱码
+- 如果 `fileName` 是 `std::wstring`（UTF-16），`fs::path` 直接用，零转换 → 不乱码
+- 这是题 5 最关键的编码决策：文件名用 `wstring`，和 `fs::path` 拼接时无编码损失
+
+#### 经验总结
+- Windows 下路径操作的最佳实践：完整路径用 `fs::path`，文件名用 `wstring`，显示用 UTF-8 `string`
+- `fs::path` 和 `wstring` 拼接时零转换（都是 UTF-16），不会乱码
+- `fs::path` 和 `string` 拼接时按 ANSI 代码页解读，UTF-8 字符串会乱码
+- C++20 下 `.u8string()` 返回 `std::u8string`（`char8_t`），不能直接输出，需要 `u8toString` 转换
+- 这套三层架构是 Windows C++ 工程处理中文路径的标准方案
+
+---
+
+### 知识点 7：安全教训（fs::remove_all 误删桌面文件）
+
+#### 现象
+测试时把 `testDir` 设为桌面路径 `C:\Users\36779\OneDrive\Desktop`，`fs::remove_all(testDir)` 直接删除了桌面上所有文件。
+
+#### 排查与原因
+- `fs::remove_all(path)` 递归删除路径下的所有文件和子目录，**不进回收站，直接永久删除**
+- 测试代码里为了"清理旧测试"调用了 `fs::remove_all(testDir)`
+- 当 `testDir` 被误设为重要目录（桌面、文档、项目根目录）时，会删除重要文件
+- `std::filesystem::remove_all` 调用 Windows API `DeleteFile` 和 `RemoveDirectory`，这些 API 直接删除，不经过回收站
+
+#### 解决方案
+测试目录必须加安全检查：
+```cpp
+// 安全检查：只允许删除指定的测试目录
+if (testDir.filename() != "test_move" && testDir.filename() != "test") {
+    std::cerr << "安全拦截：拒绝删除非测试目录 " << testDir << std::endl;
+    return 1;
+}
+fs::remove_all(testDir);
+```
+
+#### 经验总结
+- `fs::remove_all` 是危险操作，不进回收站，删除后只能靠数据恢复软件找回
+- 测试代码中使用 `remove_all` 时，必须加路径安全检查，确保只删除测试目录
+- 重要目录（桌面、文档、用户目录、项目根目录）绝不能作为 `remove_all` 的目标
+- OneDrive 同步的桌面删除后可以从 OneDrive 回收站恢复（保留 30 天），这是不幸中的万幸
+- 数据安全第一：写删除操作前，先想清楚删的是什么，有没有备份
+- 这是 file_sorter 项目开发中最深刻的安全教训，后续所有涉及删除的代码都要加安全检查
+
+---
+
+### 踩坑记录
+
+1. **测试目录误设为桌面** → `fs::remove_all` 永久删除桌面所有文件，不进回收站，靠 OneDrive 回收站恢复
+2. **`fileName` 用 `std::string`（UTF-8）** → 和 `fs::path` 拼接时按 GBK 解读 → 中文文件名乱码，必须用 `wstring`
+3. **`stem.u8string()` 拼文件名** → UTF-8 字符串构造 `fs::path` 时按 GBK 解读 → 乱码，必须用 `stem.string()`（GBK）保持自洽
+4. **C++20 下 `u8string` 直接输出** → `char8_t` 没有 `operator<<`，编译错误，需要 `u8toString` 转换
+5. **`e.what()` 异常信息中的路径乱码** → `fs::filesystem_error::what()` 返回的路径是 GBK 编码，和 UTF-8 日志拼接后输出乱码（不影响功能，可忽略）
+6. **`fs::rename` 目标已存在会覆盖** → 必须提前用 `generateUniquePath` 处理重名，否则覆盖原文件
+7. **`createTestFile` 参数用 `std::string`** → `fs::path` 不能隐式转 `std::string`，编译错误 C2664，参数应改为 `const fs::path&`
+
+---
+
+### 最终验证输出
+
+```
+===== 题5：文件移动器测试 =====
+
+【测试1】正常移动 报告.pdf
+[2026-09-13 17:02:17] [INFO] 移动成功: 报告.pdf -> C:\Users\...\target\文档\报告.pdf
+结果: 成功
+目标存在: 1
+
+【测试2】重名处理（再移动一个 报告.pdf）
+[2026-09-13 17:02:17] [INFO] 移动成功: 报告.pdf -> C:\Users\...\target\文档\报告(1).pdf
+结果: 成功
+报告(1).pdf 存在: 1
+
+【测试3】异常处理（移动不存在的文件）
+[2026-09-13 17:02:17] [ERROR] 移动失败: 不存在.exe - rename: The system cannot find the file specified.
+结果: 失败（预期）
+
+【测试4】图片分类移动
+[2026-09-13 17:02:17] [INFO] 移动成功: 风景.jpg -> C:\Users\...\target\图片\风景.jpg
+结果: 成功
+图片/风景.jpg 存在: 1
+
+===== 测试完成 =====
+请检查 C:\Users\...\target 下的目录结构
+```
+
+（4 个测试全部通过，退出代码 0）
