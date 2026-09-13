@@ -45,8 +45,9 @@
 #### 3. file_sorter 实操题经验总结
 文档路径：`docs/file_sorter实操题经验.md`
 1. 题 1：FileInfo 信息打印器 — 格式化函数职责分离（ostringstream 返回字符串）、C++ 时间类型转换 4 步走（file_time_type → time_point → time_t → tm → 字符串）、static_cast vs C 风格强制转换
-2. 题 2：分级日志系统（待完成）
-3. 后续每完成一题追加一节，记录知识点、踩坑和经验
+2. 题 2：分级日志系统 — enum class 作用域枚举必须加类名前缀、Windows.h 宏冲突与 #undef、便捷函数封装核心函数、当前时间获取比文件时间少一步转换
+3. 题 3：目录扫描器 — std::filesystem 目录遍历、隐藏文件判断与越界防护、异常隔离、fs::path 编码坑（string()=GBK / u8string()=UTF-8）、完整 UTF-8 方案三步（/utf-8 + SetConsoleOutputCP + u8string）、std::u8string 与 C++17/C++20 差异、clog vs cout vs cerr
+4. 后续每完成一题追加一节，记录知识点、踩坑和经验
 
 ### 仓库使用规范
 1. 每个新项目踩坑单独在 `docs/` 下新建同名文件夹，内部存放该项目专属 `bug_record.md`；
