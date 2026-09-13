@@ -310,4 +310,341 @@ std::string currentTime() {
 
 ## 题 3：目录扫描器
 
-（待完成）
+### 题目目标
+实现一个目录扫描函数，遍历指定目录下的所有文件（不递归子目录），跳过隐藏文件，收集每个文件的完整信息，返回 `std::vector<FileInfo>` 列表。
+
+### 知识点 1：std::filesystem 目录遍历
+
+#### 现象
+需要遍历指定目录下的所有文件，获取每个文件的路径、大小、修改时间等信息。
+
+#### 排查与原因
+C++17 引入的 `std::filesystem` 库提供了目录遍历能力，有两个迭代器：
+- `directory_iterator(path)`：只遍历当前目录的直接子条目，**不递归**
+- `recursive_directory_iterator(path)`：递归遍历所有子目录
+
+遍历时每个条目是 `directory_entry` 对象，提供以下常用方法：
+- `entry.path()`：获取完整路径
+- `entry.is_regular_file()`：判断是否为普通文件（跳过子目录）
+- `entry.is_directory()`：判断是否为子目录
+- `entry.file_size()`：获取文件大小（字节）
+- `entry.last_write_time()`：获取最后修改时间
+
+#### 解决方案
+```cpp
+for (const auto& entry : fs::directory_iterator(dirPath)) {
+    // 只处理普通文件，跳过子目录
+    if (!entry.is_regular_file()) continue;
+    
+    // 获取文件信息
+    FileInfo info;
+    info.fullPath = entry.path();
+    info.fileSize = entry.file_size();
+    info.modifyTime = entry.last_write_time();
+    result.push_back(info);
+}
+```
+
+#### 经验总结
+- `directory_iterator` 不递归，`recursive_directory_iterator` 递归，根据需求选择
+- `is_regular_file()` 过滤掉子目录、符号链接、设备文件等非普通文件
+- `directory_entry` 的方法会缓存文件属性，多次调用不重复访问文件系统，性能好
+- 遍历大目录时建议用 `directory_iterator` 而非先列目录再逐个 stat，减少系统调用
+
+---
+
+### 知识点 2：隐藏文件判断与越界防护
+
+#### 现象
+需要跳过隐藏文件（如 `.gitignore`、`.hidden`），判断文件名是否以 `.` 开头。
+
+#### 排查与原因
+- 隐藏文件的定义：文件名以 `.` 开头（Unix/Linux 惯例，Windows 也遵循）
+- 获取文件名：`filePath.filename().string()`
+- 判断首字符：`filename[0] == '.'`
+- **坑**：如果文件名为空字符串，`filename[0]` 会越界访问，导致未定义行为
+- 正常情况下文件名不会为空，但健壮的代码应该先判空再取首字符
+
+#### 解决方案
+```cpp
+bool isHiddenFile(const fs::path& filePath) {
+    std::string filename = filePath.filename().string();
+    if (!filename.empty() && filename[0] == '.') {  // 先判空再取首字符
+        return true;
+    }
+    return false;
+}
+```
+
+#### 经验总结
+- 访问字符串/数组的第一个元素前，必须先判空，避免越界
+- `filename()` 返回的是 `path` 类型，需要 `.string()` 转成 `std::string` 才能用 `[0]` 取字符
+- 隐藏文件判断只看文件名首字符，不看路径（`/home/.config/file.txt` 中 `file.txt` 不是隐藏文件）
+- Windows 上还有一种"系统隐藏文件"（通过文件属性标记），但题 3 只处理以 `.` 开头的简单隐藏文件
+
+---
+
+### 知识点 3：异常隔离（重点）
+
+#### 现象
+扫描系统目录或包含特殊文件的目录时，某个文件可能无权限访问、被其他程序占用、或文件系统错误，导致整个扫描崩溃。
+
+#### 排查与原因
+- `file_size()`、`last_write_time()` 等操作在文件无权限或被占用时会抛出 `std::filesystem::filesystem_error` 异常
+- 如果不捕获异常，一个文件的失败会导致整个 `for` 循环终止，后续文件都无法扫描
+- 批量文件操作中，单个失败是常态，不应影响整体流程
+
+#### 解决方案
+用 `try-catch` 包裹单个文件的信息获取，捕获异常后打 WARN 日志，继续扫描下一个文件：
+
+```cpp
+for (const auto& entry : fs::directory_iterator(dirPath)) {
+    if (!entry.is_regular_file()) continue;
+    if (isHiddenFile(entry.path())) continue;
+    
+    try {
+        FileInfo info;
+        info.fullPath = entry.path();
+        info.fileName = entry.path().filename().string();
+        info.fileSize = entry.file_size();
+        info.modifyTime = entry.last_write_time();
+        result.push_back(info);
+    }
+    catch (const std::exception& e) {
+        logWarn("跳过文件(读取失败): " + entry.path().string() + " - " + e.what());
+    }
+}
+```
+
+#### 经验总结
+- 批量操作（扫描、下载、转换）中，异常隔离是必须的，不能让一个失败拖垮整体
+- `try-catch` 放在循环内部，包裹单个文件的操作，而不是包裹整个循环
+- 捕获异常后要记录日志（文件名 + 错误原因），便于事后排查
+- `std::filesystem::filesystem_error` 继承自 `std::exception`，用 `const std::exception&` 捕获即可
+- 异常隔离是 file_sorter 项目的核心设计原则之一，后续 mover、classifier 模块都要遵循
+
+---
+
+### 知识点 4：fs::path 的编码坑（最重点）
+
+#### 现象
+加了 `/utf-8` 编译选项和 `SetConsoleOutputCP(CP_UTF8)` 后，源码里的中文字符串正常显示，但 `std::cout << file.fullPath` 输出的中文路径仍然乱码。
+
+#### 排查与原因
+- Windows 上 `std::filesystem::path` 内部存储的是 **UTF-16**（`wchar_t`）
+- `path::string()` 方法用 **ANSI 代码页（GBK）** 把内部的 UTF-16 转成窄字符串
+- **关键**：这个转换是标准库的**运行时行为**，不受 `/utf-8` 编译选项影响
+- `/utf-8` 只控制源码字符串字面量的编译期编码，管不到 `fs::path` 的内部转换
+- 所以即使加了 `/utf-8`，`path::string()` 和 `operator<<` 输出的仍然是 GBK
+- UTF-8 控制台解读 GBK 字节 → 乱码
+
+| 方法 | 返回编码 | 受 /utf-8 影响 |
+|---|---|---|
+| `path::string()` | GBK（ANSI 代码页） | ❌ 不受影响 |
+| `path::u8string()` | UTF-8 | ✅ 直接转 UTF-8 |
+| `path::wstring()` | UTF-16 | - |
+
+#### 解决方案
+所有 `fs::path` 转字符串都用 `.u8string()`，绕过 ANSI 代码页：
+
+```cpp
+// 填充 FileInfo 时
+info.fullPath = entry.path().u8string();           // ✅ UTF-8
+info.fileName = entry.path().filename().u8string(); // ✅ UTF-8
+info.ext = entry.path().extension().u8string();      // ✅ UTF-8
+
+// 输出时（C++20 的 u8string 不能直接 cout，需要转）
+std::cout << std::string(file.fullPath.begin(), file.fullPath.end());
+```
+
+#### 经验总结
+- Windows 上 `fs::path` 的编码是 `std::filesystem` 最大的坑，几乎所有中文路径乱码都源于此
+- 记住：`string()` = GBK，`u8string()` = UTF-8，Windows 上用 UTF-8 必须选 `u8string()`
+- `/utf-8` 编译选项管不到标准库运行时行为，不要以为加了 `/utf-8` 就万事大吉
+- 异常日志里的路径也要用 `.u8string()`，否则触发异常时日志里的路径也乱码
+- 这是 file_sorter 项目全模块都要注意的问题，scanner、mover、organizer 都涉及路径处理
+
+---
+
+### 知识点 5：完整 UTF-8 方案三步（缺一不可）
+
+#### 现象
+配置 UTF-8 环境时，经常出现"中文标签正常但中文路径乱码"或"全部乱码"的部分正常现象。
+
+#### 排查与原因
+完整 UTF-8 方案需要三步同时配置，任何一步缺失都会导致部分或全部乱码：
+
+| 步骤 | 操作 | 作用 | 缺失后果 |
+|---|---|---|---|
+| 1 | `.vcxproj` 加 `/utf-8` | 源码字符串字面量运行时为 UTF-8 | 中文标签乱码 |
+| 2 | `main()` 加 `SetConsoleOutputCP(CP_UTF8)` | 控制台按 UTF-8 解读输出 | 全部乱码 |
+| 3 | `fs::path` 用 `.u8string()` | 绕过 ANSI 代码页，强制 UTF-8 | 中文路径/文件名乱码 |
+
+- 只做 1、2：标签正常，路径乱码（最常见的坑）
+- 只做 2、3：路径正常，标签乱码
+- 只做 1、3：标签和路径都是 UTF-8，但控制台按 GBK 解读 → 全部乱码
+- 三步全做：全部正常
+
+#### 解决方案
+三步同时配置：
+
+```xml
+<!-- 第1步：.vcxproj 加 /utf-8 -->
+<AdditionalOptions>/utf-8 %(AdditionalOptions)</AdditionalOptions>
+```
+
+```cpp
+// 第2步：main() 开头加
+SetConsoleOutputCP(CP_UTF8);
+SetConsoleCP(CP_UTF8);  // 输入也用 UTF-8（可选）
+
+// 第3步：所有 fs::path 转字符串用 .u8string()
+info.fullPath = entry.path().u8string();
+```
+
+#### 经验总结
+- 完整 UTF-8 方案是"三件套"，缺一不可，记成口诀：`/utf-8` + `SetConsoleOutputCP` + `u8string()`
+- 排查中文乱码时，按这三步逐一检查，哪步缺了补哪步
+- 如果项目不需要跨平台，用方案 A（UTF-8 BOM + 默认 GBK 控制台）更简单，不需要这三步
+- 跨平台/开源项目推荐方案 B（完整 UTF-8），一次配置全平台一致
+- file_sorter 项目目前用方案 B，所有模块都要遵循这三步
+
+---
+
+### 知识点 6：std::u8string 与 C++17/C++20 差异
+
+#### 现象
+C++20 环境下，`std::cout << file.fullPath`（`fullPath` 是 `std::u8string`）报编译错误，提示没有匹配的 `operator<<`。
+
+#### 排查与原因
+- C++17：`path::u8string()` 返回 `std::string`，可直接 `cout`
+- C++20：`path::u8string()` 返回 `std::u8string`（即 `std::basic_string<char8_t>`）
+- C++20 引入了 `char8_t` 类型，用于表示 UTF-8 代码单元，与 `char` 不隐式转换
+- `std::u8string` 不能直接 `cout`，因为 `char8_t` 没有定义 `operator<<`
+- 这是 C++20 的破坏性变更，C++17 能编译的代码升到 C++20 可能报错
+
+#### 解决方案
+C++20 下把 `u8string` 转成普通 `string` 再输出：
+
+```cpp
+// 方法 1：迭代器构造（推荐，清晰可读）
+std::string(file.fullPath.begin(), file.fullPath.end())
+
+// 方法 2：reinterpret_cast（性能好，但不够安全）
+reinterpret_cast<const char*>(file.fullPath.c_str())
+
+// 封装成工具函数
+std::string u8toString(const std::u8string& u8str) {
+    return std::string(u8str.begin(), u8str.end());
+}
+```
+
+#### 经验总结
+- C++17 和 C++20 的 `u8string()` 返回类型不同，这是 C++20 的破坏性变更
+- 项目用 C++17 就行（`std::filesystem` 是 C++17 引入的），避免 `char8_t` 的麻烦
+- 如果必须用 C++20，封装一个 `u8toString()` 工具函数，所有输出统一调用
+- `char8_t` 的设计初衷是类型安全（区分 UTF-8 字符串和普通字节串），但实际使用中增加了转换成本
+- file_sorter 项目目前用 C++17，`u8string()` 返回 `std::string`，可直接使用
+
+---
+
+### 知识点 7：clog vs cout vs cerr
+
+#### 现象
+日志输出和正常程序输出都用 `std::cout`，无法分离，重定向时日志和结果混在一起。
+
+#### 排查与原因
+C++ 标准库提供了三个标准流，用途不同：
+
+| 流 | 绑定 | 缓冲 | 用途 |
+|---|---|---|---|
+| `cout` | stdout（标准输出） | 行缓冲 | 程序正常输出结果 |
+| `clog` | stderr（标准错误） | 全缓冲 | 日志信息（INFO/WARN） |
+| `cerr` | stderr（标准错误） | 无缓冲（立即刷新） | 错误信息（ERROR） |
+
+- `cout` 和 `clog`/`cerr` 绑定到不同的文件描述符（1 和 2），可以独立重定向
+- `clog` 全缓冲，性能好，适合频繁的日志输出
+- `cerr` 无缓冲，每次输出立即刷新，适合关键错误（确保崩溃前能输出）
+- 都用 `cout` 的话，重定向 `> result.txt` 会把日志也写进文件，无法分离
+
+#### 解决方案
+日志用 `clog`，正常输出用 `cout`，错误用 `cerr`：
+
+```cpp
+// 日志 → clog（stderr）
+void logInfo(const std::string& message) {
+    std::clog << "[INFO] " << message << std::endl;
+}
+
+// 正常输出 → cout（stdout）
+void printFileInfo(const FileInfo& file) {
+    std::cout << "文件名: " << file.fileName << "\n";
+}
+
+// 错误 → cerr（stderr，无缓冲）
+void logError(const std::string& message) {
+    std::cerr << "[ERROR] " << message << std::endl;
+}
+```
+
+重定向分离：
+```bash
+# 正常输出存文件，日志显示在屏幕
+my_program.exe > result.txt
+
+# 只看错误日志
+my_program.exe 2> error.log
+
+# 输出和日志分别存文件
+my_program.exe > result.txt 2> app.log
+```
+
+#### 经验总结
+- 日志和正常输出分离是工程实践的基本要求，不要都用 `cout`
+- `clog`（全缓冲）适合 INFO/WARN 日志，`cerr`（无缓冲）适合 ERROR 错误
+- 好处：可独立重定向、性能更好（clog 全缓冲减少系统调用）、语义清晰
+- file_sorter 项目的 logger 模块遵循此规范：INFO/WARN 用 `clog`，ERROR 用 `cerr`
+- 题 2 的分级日志系统已经体现了这个设计，题 3 继续沿用
+
+---
+
+### 踩坑记录
+
+1. **只加 `SetConsoleOutputCP` 不加 `/utf-8`** → 源码字符串 GBK，控制台 UTF-8 → 全部乱码
+2. **`fs::path` 直接 `cout`** → Windows 上输出 GBK，UTF-8 控制台 → 路径乱码
+3. **`std::u8string` 直接 `cout`** → C++20 编译错误（`char8_t` 没有 `operator<<`）
+4. **`filename[0]` 未判空** → 空文件名时越界访问
+5. **异常不隔离** → 一个无权限文件导致整个扫描崩溃
+6. **异常日志里用 `.string()`** → 触发异常时日志里的路径也乱码（要用 `.u8string()`）
+
+---
+
+### 最终验证输出
+
+```
+扫描目录: C:\Users\test\Documents
+
+[INFO] 扫描完成，共找到 3 个文件
+
+===== 扫描结果 =====
+----------------------------------------
+文件名:   报告.pdf
+后缀:     .pdf
+大小:     1048576 B
+路径:     "C:\Users\test\Documents\报告.pdf"
+----------------------------------------
+文件名:   代码.cpp
+后缀:     .cpp
+大小:     4096 B
+路径:     "C:\Users\test\Documents\代码.cpp"
+----------------------------------------
+文件名:   note.txt
+后缀:     .txt
+大小:     856 B
+路径:     "C:\Users\test\Documents\note.txt"
+----------------------------------------
+
+共 3 个文件
+```
+
+（隐藏文件如 `.gitignore` 被跳过，不显示）
