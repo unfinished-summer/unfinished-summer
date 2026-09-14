@@ -10,6 +10,7 @@
 - [题 4：后缀分类器](#题-4后缀分类器)
 - [题 5：文件移动器](#题-5文件移动器)
 - [题 6：编排器 Organizer](#题-6编排器-organizer)
+- [题 7：命令行参数解析 + main 入口整合](#题-7命令行参数解析--main-入口整合)
 
 ---
 
@@ -1512,3 +1513,389 @@ struct FileInfo {
 ```
 
 （2 个测试全部通过，退出代码 0）
+
+---
+
+## 题 7：命令行参数解析 + main 入口整合
+
+### 题目目标
+把前面题 1-6 的模块整合到一个**完整可运行的程序**中，通过命令行参数控制行为。用户在 cmd 里输入命令，程序解析参数后调用 Organizer 执行预览或移动。
+
+支持的命令格式：
+```bash
+file_sorter --help, -h                    # 显示帮助
+file_sorter --preview <源目录>            # 预览模式（只扫描不移动）
+file_sorter --execute <源目录> <目标目录>  # 执行模式（扫描并移动）
+```
+
+### 知识点 1：argc / argv 命令行参数解析
+
+#### 现象
+程序需要根据用户在 cmd 里输入的命令来决定执行什么操作，需要解析命令行参数。
+
+#### 排查与原因
+C/C++ 程序的 main 函数有两个标准参数：
+```cpp
+int main(int argc, char* argv[])
+```
+- `argc` = 参数个数（argument count），包括程序名本身
+- `argv` = 参数数组（argument vector），`argv[0]` 是程序名，`argv[1]` 是第一个用户参数
+
+例如输入 `file_sorter --preview D:\test`：
+- `argc = 3`
+- `argv[0] = "file_sorter"`（程序名）
+- `argv[1] = "--preview"`（模式参数）
+- `argv[2] = "D:\test"`（目录参数）
+
+#### 解决方案
+基本解析结构：
+
+```cpp
+int main(int argc, char* argv[]) {
+    // 1. 至少要有一个参数（除了程序名）
+    if (argc < 2) {
+        std::cerr << "错误：参数不足\n";
+        printHelp(argv[0]);
+        return 1;
+    }
+
+    std::string mode = argv[1];  // 第一个参数是模式
+
+    // 2. 帮助模式
+    if (mode == "--help" || mode == "-h") {
+        printHelp(argv[0]);
+        return 0;
+    }
+
+    // 3. 预览模式：需要 1 个额外参数（源目录）
+    if (mode == "--preview") {
+        if (argc < 3) { /* 报错 */ }
+        fs::path sourceDir = argv[2];
+        // 调用 Organizer.preview()
+        return 0;
+    }
+
+    // 4. 执行模式：需要 2 个额外参数（源目录 + 目标目录）
+    if (mode == "--execute") {
+        if (argc < 4) { /* 报错 */ }
+        fs::path sourceDir = argv[2];
+        fs::path targetDir = argv[3];
+        // 调用 Organizer.execute()
+        return 0;
+    }
+
+    // 5. 未知模式
+    std::cerr << "错误：未知模式 - " << mode << "\n";
+    printHelp(argv[0]);
+    return 1;
+}
+```
+
+#### 经验总结
+- `argc` 是参数个数，`argv` 是参数数组，`argv[0]` 永远是程序名
+- 解析顺序：先检查参数数量 → 再判断模式 → 再检查该模式需要的额外参数数量
+- 用 `if-else if` 链或 `switch`（需要把字符串转成枚举）来分发模式
+- 每个分支都要 `return`，避免 fall through
+- `argv` 里的字符串是 `char*`（C 风格字符串），可以直接赋值给 `std::string` 或 `fs::path`
+
+---
+
+### 知识点 2：main 函数是入口，不写业务逻辑
+
+#### 现象
+初学者容易把所有逻辑都写在 main 函数里，导致 main 函数又长又乱。
+
+#### 排查与原因
+- main 函数的职责是**程序入口**：解析参数、校验、调用业务模块、返回退出码
+- 业务逻辑（扫描、分类、移动）应该封装在各自的类/函数里，main 只负责调用
+- 如果 main 里写了大量业务逻辑，会导致：代码难以维护、无法复用、难以单元测试
+
+#### 解决方案
+main 只做"编排"，业务逻辑在类里：
+
+```cpp
+int main(int argc, char* argv[]) {
+    SetConsoleOutputCP(CP_UTF8);
+    
+    // 1. 解析参数（只做参数解析，不做业务）
+    // 2. 校验参数（只做校验，不做业务）
+    // 3. 调用业务模块（Organizer.preview / execute）
+    // 4. 打印结果（调用 printScanReport / printExecuteReport）
+    // 5. 返回退出码
+}
+```
+
+#### 经验总结
+- main 函数应该"薄"：只做参数解析、校验、调用、返回，不写具体业务逻辑
+- 业务逻辑封装在类里（Scanner、Classifier、Mover、Organizer），main 只负责调用
+- 好处：代码可复用（类可以在其他地方用）、可测试（类可以单独测试）、易维护（改业务逻辑不用动 main）
+- 这是"关注点分离"（Separation of Concerns）原则的体现
+
+---
+
+### 知识点 3：参数校验前置
+
+#### 现象
+如果不校验参数就直接调用业务逻辑，可能在深层代码里才报错，错误信息不友好。
+
+#### 排查与原因
+- 参数数量不足：`--preview` 没传源目录
+- 目录不存在：传了一个不存在的路径
+- 目录不是目录：传了一个文件路径而不是目录路径
+- 这些错误应该在 main 里就检查并给出友好提示，而不是让深层代码抛异常
+
+#### 解决方案
+在调用业务逻辑前，先校验：
+
+```cpp
+// 校验参数数量
+if (argc < 3) {
+    std::cerr << "错误：--preview 需要指定源目录\n";
+    return 1;
+}
+
+fs::path sourceDir = argv[2];
+
+// 校验目录是否存在且是目录
+if (!fs::exists(sourceDir) || !fs::is_directory(sourceDir)) {
+    std::cerr << "错误：源目录不存在 - " << u8toString(sourceDir.u8string()) << "\n";
+    return 1;
+}
+
+// 校验通过后才调用业务逻辑
+Organizer organizer;
+ScanReport report = organizer.preview(sourceDir);
+```
+
+#### 经验总结
+- 参数校验前置：在调用业务逻辑前，先检查参数数量、路径存在性、路径类型
+- 好处：错误信息友好（用户知道哪里错了）、避免深层异常、提高程序健壮性
+- `fs::exists(path)` 检查路径是否存在，`fs::is_directory(path)` 检查是否是目录
+- 校验失败时用 `std::cerr` 输出错误信息，返回非零退出码
+- 校验通过后才调用业务逻辑，避免不必要的资源消耗
+
+---
+
+### 知识点 4：退出码的意义
+
+#### 现象
+程序结束时返回一个整数，这个整数就是退出码（exit code），调用方（cmd、脚本、CI）可以根据退出码判断程序是否成功。
+
+#### 排查与原因
+| 退出码 | 含义 | 场景 |
+|---|---|---|
+| 0 | 成功 | 程序正常执行完成 |
+| 1 | 参数错误 | 参数不足、未知模式、目录不存在 |
+| 2 | 执行失败 | 业务逻辑执行出错（如移动全部失败） |
+
+- cmd 里用 `echo %errorlevel%` 查看上一个命令的退出码
+- 批处理脚本里用 `if errorlevel 1` 判断是否出错
+- CI/CD 系统根据退出码判断构建是否成功
+
+#### 解决方案
+```cpp
+if (参数错误) return 1;   // 参数错误
+if (执行失败) return 2;   // 执行失败
+return 0;                  // 成功
+```
+
+#### 经验总结
+- 退出码是程序和外部的契约：0 表示成功，非 0 表示失败
+- 不同的非 0 退出码可以表示不同类型的错误（1=参数错误，2=执行失败）
+- 调用方（脚本、CI）可以根据退出码做不同处理（如失败时发邮件通知）
+- 养成返回合适退出码的习惯，不要所有错误都 return 1
+- Unix 惯例：0=成功，1=通用错误，2=误用命令行参数，126=命令不可执行，127=命令未找到
+
+---
+
+### 知识点 5：帮助信息是用户体验的一部分
+
+#### 现象
+用户输入错误参数时，如果只输出"错误"两个字，用户不知道怎么用。
+
+#### 排查与原因
+- 帮助信息（usage/help）告诉用户程序支持哪些参数、怎么用
+- 参数错误时自动显示帮助信息，用户不需要翻文档
+- 帮助信息应该简洁明了，列出所有支持的参数和示例
+
+#### 解决方案
+```cpp
+void printHelp(const std::string& programName) {
+    std::cout << "用法：\n";
+    std::cout << "  " << programName << " --help, -h           显示帮助\n";
+    std::cout << "  " << programName << " --preview <源目录>    预览模式（只扫描不移动）\n";
+    std::cout << "  " << programName << " --execute <源目录> <目标目录>  执行模式（扫描并移动）\n";
+}
+```
+
+参数错误时自动调用：
+```cpp
+if (argc < 2) {
+    std::cerr << "错误：参数不足\n";
+    printHelp(argv[0]);  // 自动显示帮助
+    return 1;
+}
+```
+
+#### 经验总结
+- 帮助信息是用户体验的重要组成部分，不要省略
+- 参数错误时自动显示帮助，用户不需要查文档
+- 帮助信息用 `argv[0]` 作为程序名，这样无论程序叫什么名字，帮助信息里的程序名都是对的
+- 帮助信息应该简洁：列出支持的参数、参数含义、示例
+- 支持 `--help` 和 `-h` 两种写法（长选项和短选项）
+
+---
+
+### 知识点 6：命令行参数的中文编码问题
+
+#### 现象
+用户在 cmd 里输入中文路径（如 `D:\测试`），程序里 `argv[2]` 收到的字符串编码可能和源码里的字符串编码不一致。
+
+#### 排查与原因
+- Windows 下 `argv` 里的字符串是 **ANSI 代码页编码**（中文 Windows 是 GBK）
+- 这是操作系统的行为，不受 `SetConsoleOutputCP` 或 `/utf-8` 编译选项影响
+- 如果直接拿 `argv` 和 UTF-8 字符串字面量比较，会因为编码不同而不相等
+- 但如果用 `fs::path` 接收路径，`fs::path` 会自动按 ANSI 代码页解读并转成内部 UTF-16，不会丢信息
+
+#### 解决方案
+```cpp
+// ✅ 用 fs::path 接收路径，自动处理编码
+fs::path sourceDir = argv[2];
+
+// ✅ 显示时用 .u8string() 转 UTF-8
+std::cout << "源目录：" << u8toString(sourceDir.u8string()) << "\n";
+
+// ❌ 不要直接拿 argv 和 UTF-8 字符串比较
+// if (argv[2] == "测试") { ... }  // 编码不同，永远不相等
+```
+
+#### 经验总结
+- Windows 下 `argv` 是 GBK 编码，不受 `SetConsoleOutputCP` 影响
+- 用 `fs::path` 接收路径，自动转成内部 UTF-16，不会丢信息
+- 显示路径时用 `.u8string()` 转 UTF-8，避免乱码
+- 不要拿 `argv` 直接和 UTF-8 字符串字面量比较，编码不同会不相等
+- 如果需要处理中文命令行参数（如 `--模式 预览`），建议用英文参数名，避免编码问题
+
+---
+
+### 知识点 7：模块整合——把零散模块组装成完整程序
+
+#### 现象
+题 1-6 各自实现了独立模块（FileInfo、Logger、Scanner、Classifier、Mover、Organizer），题 7 需要把它们整合到一个可运行的程序里。
+
+#### 排查与原因
+- 每个模块都是独立的类/函数，职责单一
+- 整合时需要：把所有模块的代码复制到一个文件（或通过头文件包含）、在 main 里按顺序调用
+- 整合的关键是**接口匹配**：每个模块的输入输出类型要一致
+- 例如：Scanner 返回 `std::vector<FileInfo>`，Classifier 接收 `FileInfo`，Mover 接收 `FileInfo`，类型一致才能串联
+
+#### 解决方案
+整合结构：
+
+```cpp
+// 1. 数据模型（题1）
+struct FileInfo { ... };
+enum class FileCategory { ... };
+
+// 2. 工具函数
+std::string u8toString(...) { ... }
+std::string wstringToUtf8(...) { ... }
+
+// 3. 分类规则（题4）
+const auto& getCategoryMap() { ... }
+
+// 4. Scanner（题3）
+class Scanner { ... };
+
+// 5. Classifier（题4）
+class Classifier { ... };
+
+// 6. Mover（题5）
+class Mover { ... };
+
+// 7. 报告结构体（题6）
+struct ScanReport { ... };
+struct ExecuteReport : ScanReport { ... };
+
+// 8. Organizer（题6）
+class Organizer { ... };
+
+// 9. 打印函数
+void printScanReport(...) { ... }
+void printExecuteReport(...) { ... }
+
+// 10. main 入口（题7）
+int main(int argc, char* argv[]) { ... }
+```
+
+#### 经验总结
+- 模块整合的关键是**接口匹配**：每个模块的输入输出类型要一致
+- 按依赖顺序排列代码：数据模型 → 工具函数 → 分类规则 → Scanner → Classifier → Mover → 报告结构体 → Organizer → 打印函数 → main
+- 每个模块职责单一，整合时不需要修改模块内部代码，只需要在 main 里调用
+- 整合后就是一个完整的、可运行的程序
+- 这就是"模块化编程"的好处：每个模块独立开发、独立测试，最后整合
+
+---
+
+### 踩坑记录
+
+1. **fs::path 直接输出导致中文路径乱码** → `std::cout << sourceDir` 内部调用 `.string()`（GBK），UTF-8 控制台显示乱码。修复：用 `u8toString(sourceDir.u8string())` 输出。
+2. **文件名含空格和加号导致 cmd 引号处理问题** → 原文件名"命令行参数解析 + main 入口整合.cpp"含空格和加号，cmd /c 里引号嵌套处理失败。修复：用户重命名为 `file_sorter.cpp`。
+3. **C++17 不支持 std::u8string** → 代码里用了 `std::u8string` 和 `u8toString`，但用 `/std:c++17` 编译报错。修复：改用 `/std:c++20` 编译。
+4. **Mover 异常信息丢失具体错误原因** → `catch` 里只返回 `L"移动失败"`，没有包含 `e.what()` 的具体错误信息。排查问题时不方便。建议：在 catch 里打日志包含 `e.what()`，或把错误信息转成 wstring 放进返回值。
+5. **Scanner 把子目录计入 skippedCount** → `if (!entry.is_regular_file()) { result.skippedCount++; continue; }` 把子目录也算作"跳过"，语义不准确。建议：子目录直接 `continue` 不计入 skippedCount，skippedCount 只统计隐藏文件和读取失败的文件。
+
+---
+
+### 最终验证输出
+
+**8 个测试用例全部通过：**
+
+| 测试项 | 预期结果 | 实际结果 | 通过 |
+|---|---|---|---|
+| 1. 不带参数 | 报错+帮助，退出码1 | 报错+帮助，退出码1 | ✅ |
+| 2. --help | 显示帮助，退出码0 | 显示帮助，退出码0 | ✅ |
+| 3. --preview 无参数 | 报错，退出码1 | 报错，退出码1 | ✅ |
+| 4. --preview 不存在目录 | 报错+路径正常，退出码1 | 报错+路径正常，退出码1 | ✅ |
+| 5. --preview 正常 | 6文件1跳过，分类正确 | 6文件1跳过，分类正确 | ✅ |
+| 6. --execute 缺目标目录 | 报错，退出码1 | 报错，退出码1 | ✅ |
+| 7. --execute 正常 | 6成功0失败，目录正确 | 6成功0失败，目录正确 | ✅ |
+| 8. 未知模式 | 报错+帮助，退出码1 | 报错+帮助，退出码1 | ✅ |
+
+**预览模式输出：**
+```
+预览模式：扫描 ...\test_sorter\source
+总文件数: 6
+跳过: 1
+分类统计:
+  图片: 1
+  文档: 1
+  视频: 0
+  音频: 1
+  压缩包: 1
+  程序: 1
+  其他: 1
+```
+
+**执行模式输出：**
+```
+执行模式：从 ...\source 移动到 ...\target
+总文件数: 6
+跳过: 1
+分类统计:
+  图片: 1
+  文档: 1
+  视频: 0
+  音频: 1
+  压缩包: 1
+  程序: 1
+  其他: 1
+成功移动: 6
+移动失败: 0
+```
+
+**执行后目录结构：**
+- source 目录只剩 `.hidden.txt`
+- target 目录有 6 个分类文件夹，文件都在正确的文件夹里
+
+（8 个测试全部通过，中文路径显示正常，无乱码）
