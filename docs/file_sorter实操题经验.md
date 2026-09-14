@@ -11,6 +11,7 @@
 - [题 5：文件移动器](#题-5文件移动器)
 - [题 6：编排器 Organizer](#题-6编排器-organizer)
 - [题 7：命令行参数解析 + main 入口整合](#题-7命令行参数解析--main-入口整合)
+- [题 8：配置文件读取器](#题-8配置文件读取器)
 
 ---
 
@@ -1899,3 +1900,373 @@ int main(int argc, char* argv[]) { ... }
 - target 目录有 6 个分类文件夹，文件都在正确的文件夹里
 
 （8 个测试全部通过，中文路径显示正常，无乱码）
+
+---
+
+## 题 8：配置文件读取器
+
+### 题目目标
+实现一个配置文件读取模块，从 INI 风格的纯文本配置文件读取配置，让 file_sorter 的行为可以通过配置文件自定义，而不是硬编码在代码里。
+
+需要读取的配置项：
+
+| 配置节 | 配置项 | 类型 | 说明 |
+|---|---|---|---|
+| `[general]` | `skip_hidden` | bool | 是否跳过隐藏文件（默认 true） |
+| `[general]` | `default_target` | string | 默认目标目录（可选，不填则用源目录） |
+| `[ignore]` | `suffix` | string列表 | 忽略的后缀（逗号分隔，如 `.tmp,.log`） |
+| `[ignore]` | `name` | string列表 | 忽略的文件名（逗号分隔，如 `Thumbs.db`） |
+| `[categories]` | 分类名=后缀列表 | 自定义规则 | 覆盖默认分类规则（如 `图片 = .jpg,.png`） |
+
+### 知识点 1：std::ifstream 逐行读取文件
+
+#### 现象
+需要读取配置文件的内容，逐行解析。
+
+#### 排查与原因
+- `std::ifstream` 是 C++ 标准库的文件输入流，用于读取文件内容
+- `std::getline(file, line)` 逐行读取，每次读一行到 `line`，到文件末尾返回 false
+- 这种方式适合处理文本配置文件，因为配置文件是按行组织的
+
+#### 解决方案
+```cpp
+std::ifstream file(configPath);
+if (!file.is_open()) {
+    // 打开失败处理
+    return config;
+}
+
+std::string line;
+while (std::getline(file, line)) {
+    // 处理每一行
+    // ...
+}
+```
+
+#### 经验总结
+- `std::ifstream` 是读取文本文件的标准方式，包含在 `<fstream>` 头文件
+- `std::getline(file, line)` 逐行读取，自动处理换行符（`\n` 或 `\r\n`）
+- 读取前必须检查 `is_open()`，文件不存在或无权限时打开会失败
+- 逐行读取适合处理文本配置、日志、CSV 等按行组织的文件
+- 读取二进制文件应该用 `read()` 而不是 `getline()`
+
+---
+
+### 知识点 2：INI 格式解析（状态机思路）
+
+#### 现象
+INI 文件有三种行类型：节标题 `[section]`、键值对 `key = value`、注释 `# comment`，需要区分处理。
+
+#### 排查与原因
+INI 格式的解析本质是一个**简单状态机**：
+- 用一个状态变量 `currentSection` 记录当前在哪个节
+- 遇到 `[section]` 行，更新 `currentSection`
+- 遇到 `key = value` 行，根据 `currentSection` 决定怎么处理
+- 遇到空行或注释行，跳过
+
+```
+逐行读取:
+  "# 注释"        → 跳过
+  ""（空行）      → 跳过
+  "[general]"     → currentSection = "general"
+  "skip_hidden = true" → 解析 key="skip_hidden", value="true"
+                          根据 currentSection="general" 分发处理
+```
+
+#### 解决方案
+```cpp
+std::string currentSection;  // 状态变量：当前所在的节
+
+while (std::getline(file, line)) {
+    std::string trimmedLine = trim(line);
+
+    // 跳过空行
+    if (trimmedLine.empty()) continue;
+
+    // 跳过注释行（# 开头）
+    if (trimmedLine[0] == '#') continue;
+
+    // 判断是否是节标题 [section]
+    if (trimmedLine[0] == '[' && trimmedLine.back() == ']') {
+        currentSection = trimmedLine.substr(1, trimmedLine.size() - 2);
+        continue;
+    }
+
+    // 否则是 key = value 格式
+    size_t eqPos = trimmedLine.find('=');
+    if (eqPos == std::string::npos) continue;  // 没有等号，跳过
+
+    std::string key = trim(trimmedLine.substr(0, eqPos));
+    std::string value = trim(trimmedLine.substr(eqPos + 1));
+
+    // 根据 currentSection 分发处理
+    if (currentSection == "general") {
+        // ...
+    } else if (currentSection == "ignore") {
+        // ...
+    } else if (currentSection == "categories") {
+        // ...
+    }
+}
+```
+
+#### 经验总结
+- INI 解析的核心是**状态变量 `currentSection`**，记录当前在哪个节
+- 行类型判断顺序：空行 → 注释 → 节标题 → 键值对
+- 节标题用 `substr(1, size-2)` 去掉首尾的 `[` 和 `]`
+- 键值对用 `find('=')` 找等号位置，前后分别 `substr` + `trim`
+- 未知的 section 或 key 直接忽略，不报错（容错设计）
+- 这种状态机思路也适用于解析其他简单格式（如 CSV、简单的配置文件）
+
+---
+
+### 知识点 3：字符串处理三件套（trim / split / parseBool）
+
+#### 现象
+配置文件解析需要三个基础字符串操作：去空格、按分隔符分割、解析布尔值。
+
+#### 排查与原因
+配置文件里的值可能有各种格式问题：
+- `skip_hidden = true ` 末尾有空格 → 需要 `trim`
+- `suffix = .tmp, .log, .bak` 逗号后有空格 → 需要 `split` + `trim`
+- `skip_hidden = True` 大小写不统一 → 需要 `parseBool`
+
+这三个函数是配置解析的基础工具，封装后可以复用。
+
+#### 解决方案
+
+**trim（去首尾空格）**：
+```cpp
+std::string trim(const std::string& str) {
+    if (str.empty()) return "";
+    size_t start = 0;
+    while (start < str.size() && std::isspace(static_cast<unsigned char>(str[start]))) start++;
+    if (start == str.size()) return "";
+    size_t end = str.size() - 1;
+    while (end > start && std::isspace(static_cast<unsigned char>(str[end]))) end--;
+    return str.substr(start, end - start + 1);
+}
+```
+
+**split（按分隔符分割）**：
+```cpp
+std::vector<std::string> split(const std::string& str, char delimiter) {
+    std::vector<std::string> result;
+    std::stringstream ss(str);
+    std::string item;
+    while (std::getline(ss, item, delimiter)) {
+        std::string trimmed = trim(item);
+        if (!trimmed.empty()) result.push_back(trimmed);
+    }
+    return result;
+}
+```
+
+**parseBool（解析布尔值）**：
+```cpp
+bool parseBool(const std::string& str, bool defaultValue) {
+    std::string trimmed = trim(str);
+    for (char& ch : trimmed) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    if (trimmed == "true" || trimmed == "1" || trimmed == "yes" || trimmed == "on") return true;
+    if (trimmed == "false" || trimmed == "0" || trimmed == "no" || trimmed == "off") return false;
+    return defaultValue;
+}
+```
+
+#### 经验总结
+- `trim`、`split`、`parseBool` 是配置解析的三件套，几乎所有配置文件解析都需要
+- `trim` 用双指针法：从前往后找第一个非空格，从后往前找最后一个非空格
+- `split` 用 `stringstream` + `getline` 是标准做法，每段 trim 后加入结果，空段跳过
+- `parseBool` 支持多种写法（true/false、1/0、yes/no、on/off），转小写后比较，解析失败返回默认值
+- 这三个函数都是纯函数（输入相同输出相同，无副作用），可以在其他项目中复用
+- `isspace` 和 `tolower` 的参数必须转 `unsigned char`，避免负数字符的未定义行为
+
+---
+
+### 知识点 4：默认值设计（配置缺失不崩溃）
+
+#### 现象
+配置文件可能不完整（用户只写了部分配置项），或者配置文件不存在，程序不能因此崩溃。
+
+#### 排查与原因
+- 配置文件是可选的，用户可能只关心部分配置，其他用默认值
+- 配置文件不存在时，程序应该用全部默认值继续运行，而不是报错退出
+- 默认值应该合理：`skip_hidden` 默认 true（跳过隐藏文件是常见行为），`defaultTarget` 默认空（不设置默认目标目录）
+
+#### 解决方案
+```cpp
+struct Config {
+    bool skipHidden = true;                          // 默认跳过隐藏文件
+    std::string defaultTarget;                       // 默认空（不设置）
+    std::unordered_set<std::string> ignoreSuffix;   // 默认空集合
+    std::unordered_set<std::string> ignoreName;     // 默认空集合
+    std::unordered_map<std::string, std::vector<std::string>> customCategories;  // 默认空
+    bool loaded = false;                             // 默认未加载
+};
+
+Config loadConfig(const fs::path& configPath) {
+    Config config;  // 先用默认值初始化
+
+    if (!fs::exists(configPath)) {
+        std::cerr << "[WARN] 配置文件不存在，使用默认配置\n";
+        return config;  // 返回全是默认值的 config
+    }
+
+    // ... 读取并解析，只覆盖配置文件中存在的项
+
+    config.loaded = true;
+    return config;
+}
+```
+
+#### 经验总结
+- 配置结构体的每个字段都应该有合理的默认值，用 `= 值` 的方式在结构体定义时指定
+- `loadConfig` 函数开头先构造一个全默认值的 `Config`，然后只覆盖配置文件中存在的项
+- 配置文件不存在或打开失败时，返回全默认值的 Config，不崩溃
+- `loaded` 字段标记配置是否成功加载，调用方可以根据这个字段决定是否提示用户
+- 默认值设计是"容错编程"的体现：程序在不完美的输入下也能正常运行
+- 新增配置项时，一定要给默认值，否则旧配置文件（没有这个项）会导致未初始化值
+
+---
+
+### 知识点 5：配置与代码分离（改配置不需要重新编译）
+
+#### 现象
+如果分类规则、忽略列表等都硬编码在代码里，用户想修改规则就要改代码、重新编译，很不方便。
+
+#### 排查与原因
+- 硬编码的问题：修改规则需要改代码、重新编译、重新发布
+- 配置文件的好处：用户直接编辑文本文件，不需要编程知识，不需要重新编译
+- 这是"数据与逻辑分离"原则的体现：分类规则是数据，应该放在配置文件里；分类逻辑是代码，应该放在程序里
+
+#### 解决方案
+```ini
+# config.ini
+[general]
+skip_hidden = true
+default_target = D:\sorted
+
+[ignore]
+suffix = .tmp, .log, .bak
+name = Thumbs.db, .DS_Store
+
+[categories]
+图片 = .jpg, .jpeg, .png, .gif
+文档 = .pdf, .doc, .docx, .txt, .md
+```
+
+用户想新增一个分类，只需要在配置文件里加一行：
+```ini
+电子书 = .epub, .mobi, .azw3
+```
+不需要改代码、不需要重新编译。
+
+#### 经验总结
+- 配置与代码分离是工程实践的基本原则：可变的行为用配置控制，不变的逻辑用代码实现
+- 好处：用户可以自定义行为、不需要重新编译、修改配置即时生效
+- 适合放在配置文件里的内容：分类规则、忽略列表、默认路径、开关选项、阈值参数
+- 不适合放在配置文件里的内容：核心业务逻辑、算法实现、安全相关的硬编码
+- INI 格式简单易懂，非技术用户也能编辑；复杂配置可以用 JSON、YAML、TOML 等格式
+- 配置文件应该有注释，说明每个配置项的含义和可选值
+
+---
+
+### 知识点 6：substr 和 find 的用法（易错点）
+
+#### 现象
+解析配置文件时频繁用到 `substr` 和 `find`，容易搞混参数含义。
+
+#### 排查与原因
+
+**`find` 的返回值**：
+- `find('=')` 返回等号所在的**索引位置**，从 0 开始
+- 找不到时返回 `std::string::npos`（不是 -1，因为返回类型是无符号整数 `size_t`）
+
+**`substr` 的参数**：
+- `substr(pos, count)` 第一个参数是**起始位置**，第二个参数是**长度**（不是结束位置）
+- 第二个参数可选，不填就取到末尾
+
+**题 8 中的实际用法**：
+```cpp
+// trimmedLine = "skip_hidden = true"
+// 索引:         0123456789...
+// 等号在索引 12（第13个字符）
+
+size_t eqPos = trimmedLine.find('=');  // eqPos = 12
+
+std::string key = trim(trimmedLine.substr(0, eqPos));
+// substr(0, 12) = 从位置0开始取12个字符 = 索引0-11 = "skip_hidden "（含末尾空格）
+
+std::string value = trim(trimmedLine.substr(eqPos + 1));
+// substr(13) = 从位置13开始取到末尾 = " true"（含开头空格）
+```
+
+#### 经验总结
+- `find` 返回的是索引位置，从 0 开始；找不到返回 `std::string::npos`
+- `substr(pos, count)` 第二个参数是长度，不是结束位置；`substr(0, 5)` 取前 5 个字符（索引 0-4）
+- 解析 `key = value` 时：`key = substr(0, eqPos)`，`value = substr(eqPos + 1)`
+- `eqPos + 1` 是为了跳过等号本身，从等号后面一个字符开始取
+- 这两个函数是字符串处理的基础，必须熟练掌握，避免 off-by-one 错误
+
+---
+
+### 踩坑记录
+
+1. **TODO 注释没删** → 代码实现后应清理框架里的 TODO 注释，否则代码里留着大量注释显得不整洁。
+2. **fs::path 直接输出可能 GBK 乱码** → WARN 日志里 `std::cerr << configPath` 直接输出 fs::path，Windows 上内部调用 `.string()`（GBK），中文路径可能乱码。建议用 `configPath.u8string()` 输出。
+3. **substr 第二个参数是长度不是结束位置** → 容易搞混，`substr(0, eqPos)` 是取前 eqPos 个字符，不是取到索引 eqPos。
+4. **find 返回 npos 表示没找到** → 不是返回 -1，因为返回类型是无符号整数 `size_t`，判断时用 `== std::string::npos`。
+5. **trimmedLine.back() 在空字符串时会崩溃** → 但题 8 中前面已经判断了 `trimmedLine.empty()` 并 continue，所以这里安全。写代码时要注意访问 `back()` 前确保字符串非空。
+
+---
+
+### 最终验证输出
+
+**测试 1：读取存在的配置文件**
+```
+========== 配置内容 ==========
+加载状态: 成功
+
+[general]
+  skip_hidden: false
+  default_target: D:\sorted_files
+
+[ignore]
+  suffix: .bak .log .tmp
+  name: .DS_Store Thumbs.db
+
+[categories] (自定义规则)
+  图片 = .jpg .png .gif
+  文档 = .pdf .txt .md
+==============================
+```
+
+**测试 2：读取不存在的配置文件（返回默认值）**
+```
+[WARN] 配置文件不存在，使用默认配置: not_exist.ini
+========== 配置内容 ==========
+加载状态: 失败(使用默认值)
+
+[general]
+  skip_hidden: true
+  default_target: (未设置)
+
+[ignore]
+  suffix:
+  name:
+
+[categories] (自定义规则)
+==============================
+```
+
+**测试 3：工具函数验证**
+```
+trim("  hello  ") = "hello"
+split("a, b, c", ',') = [a] [b] [c]
+parseBool("yes", false) = true
+parseBool("invalid", true) = true
+```
+
+（3 个测试全部通过，配置解析正确，默认值合理）
