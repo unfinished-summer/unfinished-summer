@@ -49,7 +49,8 @@
 3. 题 3：目录扫描器 — std::filesystem 目录遍历、隐藏文件判断与越界防护、异常隔离、fs::path 编码坑（string()=GBK / u8string()=UTF-8）、完整 UTF-8 方案三步（/utf-8 + SetConsoleOutputCP + u8string）、std::u8string 与 C++17/C++20 差异、clog vs cout vs cerr
 4. 题 4：后缀分类器 — 后缀标准化（去点+转小写）、分类规则表集中管理（unordered_map + static const 单例）、enum class 转中文（switch）、默认值处理（未知后缀返回 OTHER）、char 是基本类型没有成员方法
 5. 题 5：文件移动器 — fs::create_directories 递归创建目录、重名处理逻辑（stem/ext 拆解 + while 循环）、字符串拼接中的隐式转换（string+const char* → string → fs::path 构造、GBK 自洽性）、fs::rename 移动文件（同分区原子/跨分区先复制后删除）、异常隔离、Windows 编码三层架构（fs::path 存路径/wstring 存文件名/u8string 转显示）、安全教训（fs::remove_all 误删桌面文件，测试目录必须加安全检查）
-6. 后续每完成一题追加一节，记录知识点、踩坑和经验
+6. 题 6：编排器 Organizer — 组合模式（持有 Scanner/Classifier/Mover 成员对象，组合优于继承）、双模式代码复用（预览和执行共享扫描+分类逻辑）、报告结构体而非直接打印（数据与展示分离）、源目录和目标目录分离（execute 双参数设计）、聚合初始化（return {true, L""} 省略类型名）、std::distance 计算迭代器间距、静态分析警告（C6001/C26495 不是真正的错误）、SetConsoleOutputCP + wcout 不兼容（UTF-8 控制台对宽字符输出有 bug）
+7. 后续每完成一题追加一节，记录知识点、踩坑和经验
 
 ### 仓库使用规范
 1. 每个新项目踩坑单独在 `docs/` 下新建同名文件夹，内部存放该项目专属 `bug_record.md`；
