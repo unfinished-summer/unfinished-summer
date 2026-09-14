@@ -1146,3 +1146,360 @@ fs::remove_all(testDir);
 ```
 
 （4 个测试全部通过，退出代码 0）
+
+---
+
+## 题 6：编排器 Organizer
+
+### 题目目标
+实现一个编排器类，把前面题 3（扫描）、题 4（分类）、题 5（移动）三个模块串联起来，支持预览/执行双模式，返回统计报告。这是把零散模块组装成完整工具的关键一步。
+
+### 知识点 1：组合模式（Composition）
+
+#### 现象
+Organizer 需要同时使用 Scanner、Classifier、Mover 三个模块的功能，但不应该继承它们。
+
+#### 排查与原因
+- Organizer 的职责是"编排"，不是"扫描"或"分类"或"移动"
+- 如果继承 Scanner，Organizer 就变成了一个 Scanner，违反了"is-a"关系（Organizer 不是一个 Scanner）
+- 正确的做法是**组合**：Organizer 持有三个成员对象，调用它们的接口完成编排
+- 这就是"组合优于继承"（Favor composition over inheritance）的设计原则
+
+#### 解决方案
+```cpp
+class Organizer {
+private:
+    Scanner scanner_;        // 持有 Scanner 对象
+    Classifier classifier_;  // 持有 Classifier 对象
+    Mover mover_;            // 持有 Mover 对象
+
+public:
+    ScanReport preview(const fs::path& targetDir) {
+        Scanner::ScanResult scanResult = scanner_.scan(targetDir);  // 调用 scanner_
+        classifyFiles(scanResult.files);                              // 调用 classifier_
+        // ...
+    }
+};
+```
+
+#### 经验总结
+- 组合模式：类 A 持有类 B 的对象作为成员，通过调用 B 的接口来使用 B 的功能
+- 继承是"is-a"关系（猫是动物），组合是"has-a"关系（汽车有发动机）
+- 组合更灵活：可以在运行时替换成员对象，继承在编译时就固定了
+- 组合更安全：不会继承父类的不必要接口，不会破坏封装
+- file_sorter 项目中 Organizer 就是典型的组合模式应用
+
+---
+
+### 知识点 2：双模式代码复用（预览 vs 执行）
+
+#### 现象
+预览模式和执行模式的前两步（扫描 + 分类）完全相同，只有第三步不同（预览不移动，执行移动）。
+
+#### 排查与原因
+- 如果把扫描和分类的代码在 preview() 和 execute() 里各写一遍，会产生重复代码
+- 重复代码的问题：修改一处容易忘记改另一处，维护成本高
+- 正确的做法：提取共享逻辑，两个模式都调用共享部分
+
+#### 解决方案
+两种复用方式：
+
+**方式 A（当前实现）**：preview 和 execute 各自调用私有辅助函数 `classifyFiles()` 和 `buildReport()`，共享这两个辅助函数的逻辑。
+
+```cpp
+ScanReport preview(const fs::path& targetDir) {
+    Scanner::ScanResult scanResult = scanner_.scan(targetDir);
+    classifyFiles(scanResult.files);      // 共享
+    ScanReport report = buildReport(scanResult.files);  // 共享
+    report.skippedCount = scanResult.skippedCount;
+    return report;  // 不移动
+}
+
+ExecuteReport execute(const fs::path& targetDir, const fs::path& outputDir) {
+    Scanner::ScanResult scanResult = scanner_.scan(targetDir);
+    classifyFiles(scanResult.files);      // 共享
+    ScanReport baseReport = buildReport(scanResult.files);  // 共享
+    // ... 额外的移动逻辑
+}
+```
+
+**方式 B（更彻底）**：execute 内部先调用 preview 得到基础报告，再执行移动。
+
+```cpp
+ExecuteReport execute(const fs::path& targetDir, const fs::path& outputDir) {
+    ScanReport baseReport = preview(targetDir);  // 复用 preview
+    ExecuteReport report;
+    report.totalFiles = baseReport.totalFiles;
+    report.countByCategory = baseReport.countByCategory;
+    // ... 执行移动
+}
+```
+
+#### 经验总结
+- DRY 原则（Don't Repeat Yourself）：不要重复代码
+- 共享逻辑提取为私有辅助函数（classifyFiles、buildReport），供多个公共方法调用
+- 预览和执行的差异点只有"是否移动"，共享扫描+分类逻辑
+- 方式 B 更彻底（execute 直接调用 preview），但需要注意 preview 的返回值类型和 execute 的关系
+- 代码复用是工程实践的基本要求，减少维护成本和 bug
+
+---
+
+### 知识点 3：报告结构体而非直接打印
+
+#### 现象
+Organizer 的 preview() 和 execute() 应该返回统计数据，而不是在函数内部直接打印。
+
+#### 排查与原因
+- 如果在 Organizer 内部直接 `std::cout` 打印结果，输出格式就被固定了
+- 调用方（main.cpp、GUI、日志系统）可能需要不同的输出格式
+- 直接打印也不利于单元测试：测试需要断言数字，而不是解析输出文本
+
+#### 解决方案
+函数返回报告结构体，打印由调用方决定：
+
+```cpp
+struct ScanReport {
+    size_t totalFiles;
+    std::array<size_t, 7> countByCategory;
+    size_t skippedCount;
+};
+
+struct ExecuteReport : ScanReport {
+    size_t movedCount;
+    size_t failedCount;
+};
+
+// Organizer 返回报告，不打印
+ScanReport preview(const fs::path& targetDir);
+ExecuteReport execute(const fs::path& targetDir, const fs::path& outputDir);
+
+// main.cpp 决定怎么打印
+void printScanReport(const ScanReport& report) {
+    std::cout << "总文件数: " << report.totalFiles << "\n";
+    // ...
+}
+```
+
+#### 经验总结
+- 数据和展示分离：业务逻辑只负责计算数据，展示逻辑负责怎么显示
+- 返回结构体而非直接打印，提高可复用性（同一数据可用于控制台、GUI、日志、文件输出）
+- 便于单元测试：直接断言结构体字段，不需要解析输出文本
+- ExecuteReport 继承 ScanReport，复用基础统计字段，只增加移动相关字段
+- 这是 MVC（Model-View-Controller）模式的简化版：Report 是 Model，打印函数是 View
+
+---
+
+### 知识点 4：源目录和目标目录分离（execute 双参数）
+
+#### 现象
+execute() 最初只有一个参数 targetDir，扫描和移动都用同一个目录，导致文件被移到源目录下的分类子文件夹，而不是独立的目标目录。
+
+#### 排查与原因
+- 单参数设计假设"就地整理"（在源目录下创建分类文件夹并移动）
+- 但实际需求可能是"扫描源目录，移动到目标目录"（两个不同的目录）
+- 单参数设计无法支持"源目录不动，文件移到别处"的场景
+- 测试代码中定义了 sourceDir 和 targetDir 两个目录，但 execute 只接收一个，导致 targetDir 从未被创建，最后遍历 targetDir 时抛 Path_not_found 异常
+
+#### 解决方案
+execute() 接受两个参数：源目录和目标目录
+
+```cpp
+// 声明
+ExecuteReport execute(const fs::path& sourceDir, const fs::path& targetDir);
+
+// 实现
+ExecuteReport execute(const fs::path& sourceDir, const fs::path& targetDir) {
+    Scanner::ScanResult scanResult = scanner_.scan(sourceDir);  // 扫描源目录
+    classifyFiles(scanResult.files);
+    // ...
+    for (const FileInfo& file : scanResult.files) {
+        Mover::MoveResult result = mover_.moveFile(file, targetDir);  // 移到目标目录
+        // ...
+    }
+}
+
+// 调用
+ExecuteReport report = organizer.execute(sourceDir, targetDir);
+```
+
+#### 经验总结
+- 源目录（输入）和目标目录（输出）是两个不同的概念，应该分开
+- 单参数设计只支持"就地整理"，双参数设计同时支持"就地整理"（sourceDir == targetDir）和"移动到别处"（sourceDir != targetDir）
+- 接口设计要考虑扩展性：参数分离比参数合并更灵活
+- 测试时要验证目标目录确实被创建，避免遍历不存在的目录导致异常
+- file_sorter 项目的最终设计应该支持双参数，让用户选择就地整理还是移动到指定目录
+
+---
+
+### 知识点 5：聚合初始化（return {true, L""}）
+
+#### 现象
+Mover::moveFile 里用 `return {true, L""};` 返回 MoveResult 结构体，不需要写类型名。
+
+#### 排查与原因
+- `MoveResult` 是聚合类型（aggregate）：没有用户声明的构造函数、没有私有/保护的非静态数据成员、没有基类、没有虚函数
+- C++11 起，聚合类型可以用花括号 `{}` 按成员声明顺序初始化
+- 在 return 语句中，编译器知道返回类型是 MoveResult，所以可以省略类型名，直接写 `return {true, L""};`
+- 花括号里的值按成员声明顺序赋值：第一个值给 success，第二个值给 errorMsg
+
+#### 解决方案
+```cpp
+struct MoveResult {
+    bool success;
+    std::wstring errorMsg;
+};
+
+MoveResult moveFile(...) {
+    if (成功) return {true, L""};           // 等价于 return MoveResult{true, L""};
+    else     return {false, L"移动失败"};    // 等价于 return MoveResult{false, L"移动失败"};
+}
+```
+
+#### 经验总结
+- 聚合初始化（aggregate initialization）是 C++11 引入的语法，用 `{}` 按顺序初始化结构体成员
+- return 语句中可以省略类型名，编译器根据返回类型推导
+- 花括号里的值必须和成员声明顺序一致，数量可以少（剩余成员用默认值），不能多
+- 窄化转换（如 double→int）在花括号初始化中会报警告/错误
+- C++20 引入指定初始化器（designated initializers）：`return {.success = true, .errorMsg = L""};`，可以按名字赋值，不依赖顺序
+- 这种写法在现代 C++ 中很常见，特别是返回简单结果结构体时
+
+---
+
+### 知识点 6：std::distance 计算迭代器间距
+
+#### 现象
+测试代码中用 `std::distance(fs::directory_iterator(sourceDir), fs::directory_iterator{})` 统计目录下的文件数量。
+
+#### 排查与原因
+- `std::distance(first, last)` 计算两个迭代器之间的元素个数
+- `fs::directory_iterator(sourceDir)` 是指向目录第一个条目的迭代器（起点）
+- `fs::directory_iterator{}` 是默认构造的迭代器，表示"结束"（end 哨兵）
+- distance 从起点逐个递增到终点，统计经过的元素数 = 目录下的条目数
+- `fs::directory_iterator` 是输入迭代器（input iterator），只能单遍遍历，所以 distance 内部是逐个 ++ 计数，O(n)
+
+#### 解决方案
+```cpp
+// 统计目录下的文件/子目录数量
+size_t count = std::distance(
+    fs::directory_iterator(sourceDir),  // 起点
+    fs::directory_iterator{}             // 终点（end 哨兵）
+);
+```
+
+等价于：
+```cpp
+size_t count = 0;
+for (auto it = fs::directory_iterator(sourceDir); it != fs::directory_iterator{}; ++it) {
+    count++;
+}
+```
+
+#### 经验总结
+- `std::distance(first, last)` 计算两个迭代器之间的元素个数，定义在 `<iterator>`
+- 随机访问迭代器（如 vector::iterator）：distance 用 `last - first`，O(1)
+- 输入/前向迭代器（如 list::iterator、directory_iterator）：distance 逐个 ++，O(n)
+- 输入迭代器是单遍的：调用 distance 后起点迭代器就被消耗了，不能再用
+- 测试代码中每次都是新构造的 directory_iterator，所以没问题
+- 需要 `#include <iterator>`，虽然可能通过其他头文件间接包含
+
+---
+
+### 知识点 7：静态分析警告（C6001 / C26495）不是真正的错误
+
+#### 现象
+VS 错误列表显示 C6001（使用未初始化的内存"report"）和 C26495（未初始化变量 FileInfo::category）警告，但程序编译运行都正常，结果也正确。
+
+#### 排查与原因
+- C6001 和 C26495 是 VS 的 IntelliSense 静态代码分析警告，不是编译错误
+- 静态分析器做保守判断：它没有追踪到 `buildReport()` 函数内部对 report 所有字段的初始化，所以认为 report 可能未初始化
+- 实际上 `buildReport()` 里明确初始化了 totalFiles、countByCategory.fill(0)、skippedCount = 0
+- C26495 是因为 FileInfo 结构体的 category 字段没有默认初始化值，虽然 Scanner::scan 里给每个文件都赋了 `info.category = FileCategory::OTHER`
+- 这些警告不影响编译和运行，只是静态分析器的"可能有问题"提示
+
+#### 解决方案
+可以忽略，也可以通过加默认值消除：
+
+```cpp
+// 方法1：给结构体字段加默认值（推荐）
+struct FileInfo {
+    fs::path fullPath;
+    std::wstring fileName;
+    std::wstring ext;
+    uint64_t fileSize = 0;
+    fs::file_time_type modifyTime{};
+    FileCategory category = FileCategory::OTHER;  // 加默认值
+};
+
+// 方法2：忽略警告（不推荐，但可以）
+// 在代码中加 #pragma warning(disable: 6001 26495)
+```
+
+#### 经验总结
+- 静态分析警告（C6xxx、C26xxx）不是编译错误，不影响程序运行
+- 静态分析器做保守判断，可能有误报（它不会深入追踪所有函数调用）
+- 但警告也有价值：提醒你检查是否真的初始化了所有字段
+- 最佳实践：给结构体字段加默认值，既消除警告，又提高代码健壮性
+- 区分三种级别：错误（Error，编译失败）、警告（Warning，编译通过但可能有问题）、静态分析警告（Analyze，更保守的提示）
+
+---
+
+### 踩坑记录
+
+1. **execute 只有一个参数导致源目录和目标目录混淆** → 文件被移到 `sourceDir/分类/` 下而不是 `targetDir/分类/` 下，最后遍历不存在的 targetDir 抛 `filesystem_error`（Path_not_found）。修复：execute 接受 sourceDir 和 targetDir 两个参数。
+2. **遍历不存在的目录抛 filesystem_error** → `fs::directory_iterator(targetDir)` 在 targetDir 不存在时抛 `Path_not_found` 异常，程序中断。修复：确保目标目录在遍历前已被创建（mover 内部会 create_directories），或加 exists 检查。
+3. **C6001 静态分析误报** → "使用未初始化的内存'report'"，实际上 buildReport() 已初始化所有字段。可忽略或给结构体字段加默认值消除。
+4. **C26495 静态分析警告** → "未初始化变量 FileInfo::category"，因为结构体没有默认值。修复：给 category 加 `= FileCategory::OTHER` 默认值。
+5. **缺少 #include <iterator>** → `std::distance` 定义在 `<iterator>`，虽然可能通过其他头文件间接包含，但显式包含更安全。
+6. **缺少 #include <fstream>** → `std::ofstream` 需要 `<fstream>` 头文件，测试代码的 createTestFile 函数用到了。
+7. **缺少 #include <cwctype>** → `std::towlower` 需要 `<cwctype>` 头文件，Classifier::normalizeExtension 里用到了。
+8. **SetConsoleOutputCP(CP_UTF8) + std::wcout 不兼容** → Windows 控制台在 UTF-8 代码页下对宽字符输出有 bug，中文可能乱码或不输出。修复：全部用 std::cout 输出 UTF-8 窄字符串，wstring 用 wstringToUtf8() 转换后再输出。
+
+---
+
+### 最终验证输出
+
+```
+===== 测试1：预览模式 =====
+总文件数: 6
+跳过: 1
+分类统计:
+  图片: 1
+  文档: 1
+  视频: 0
+  音频: 1
+  压缩包: 1
+  程序: 1
+  其他: 1
+源目录文件数（预览后应不变）: 7
+
+===== 测试2：执行模式 =====
+总文件数: 6
+跳过: 1
+分类统计:
+  图片: 1
+  文档: 1
+  视频: 0
+  音频: 1
+  压缩包: 1
+  程序: 1
+  其他: 1
+成功移动: 6
+移动失败: 0
+源目录剩余文件数: 1
+
+目标目录结构:
+  图片/
+    photo.jpg
+  文档/
+    report.pdf
+  音频/
+    music.mp3
+  程序/
+    code.cpp
+  压缩包/
+    archive.zip
+  其他/
+    unknown.xyz
+```
+
+（2 个测试全部通过，退出代码 0）
