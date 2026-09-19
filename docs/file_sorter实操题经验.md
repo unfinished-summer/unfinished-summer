@@ -12,6 +12,7 @@
 - [题 6：编排器 Organizer](#题-6编排器-organizer)
 - [题 7：命令行参数解析 + main 入口整合](#题-7命令行参数解析--main-入口整合)
 - [题 8：配置文件读取器](#题-8配置文件读取器)
+- [题 9：配置文件接入——让配置真正控制程序](#题-9配置文件接入让配置真正控制程序)
 
 ---
 
@@ -2270,3 +2271,197 @@ parseBool("invalid", true) = true
 ```
 
 （3 个测试全部通过，配置解析正确，默认值合理）
+
+---
+
+## 题 9：配置文件接入——让配置真正控制程序
+
+### 题目目标
+把题 8 的 Config 结构体接入题 7 的完整程序，让配置真正流进扫描、分类、移动各环节，实现"配置文件驱动"：
+
+1. `Scanner::scan` 增加 `skipHidden` 参数，由 `Config.skipHidden` 控制是否跳过隐藏文件
+2. `Organizer` 持有 Config，按 `ignoreSuffix`/`ignoreName` 过滤文件，execute 目标目录为空时回退 `defaultTarget`
+3. `main` 支持 `--config <路径>` 参数，没传则尝试加载程序同目录的 `config.ini`，不存在就用默认值
+
+### 知识点 1：配置注入（依赖注入的雏形）
+
+#### 现象
+业务模块（Scanner/Organizer）需要知道配置，但不应自己读配置文件。
+
+#### 排查与原因
+- 配置加载是"一次性的、全局的"工作，应该由 main 统一完成
+- 业务模块如果自己读文件，就没法单独测试（测试时还要准备真实配置文件）
+- 正确做法：main 加载 Config 对象，通过构造函数/参数传给业务模块
+
+#### 解决方案
+```cpp
+class Organizer {
+public:
+    Organizer(const Config& config) : config_(config) {}  // 构造时注入配置
+private:
+    Config config_;  // 持有配置副本
+};
+```
+
+#### 经验总结
+- 依赖注入（Dependency Injection）：对象的依赖由外部传入，而不是自己创建
+- 好处：可测试（传不同配置测不同行为）、可复用、解耦
+- 传参用 const& 避免拷贝；类成员需要长期持有则复制一份
+- 这是大型框架（如 Spring）的核心思想，C++ 里用构造函数传参实现
+- 代码里 Organizer 依赖的 Scanner/Classifier/Mover 也是构造时创建，同样体现了"组合优于继承"
+
+---
+
+### 知识点 2：参数优先级：命令行 > 配置文件 > 默认值
+
+#### 现象
+execute 的目标目录可能来自三个地方：命令行参数、配置文件的 default_target、什么都没有。
+
+#### 排查与原因
+- 用户的显式意图（命令行）优先级最高
+- 其次是一般性偏好（配置文件）
+- 最后是代码里的默认值
+- 这是所有成熟 CLI 工具的通用规则
+
+#### 解决方案
+```cpp
+// execute 里：命令行没给目标目录 → 用配置里的 default_target
+if (targetDir.empty()) {
+    if (!config_.defaultTarget.empty()) {
+        targetDir = config_.defaultTarget;
+    } else {
+        // 两个都没有，报错并返回空报告
+    }
+}
+```
+
+#### 经验总结
+- 记住优先级顺序：**命令行 > 配置文件 > 默认值**
+- 实现方式：从高到低依次检查，前一个没有就落到下一个
+- 配置字段本身也要有默认值（Config 结构体里 `= 值` 初始化），构成最底层兜底
+- 这个优先级规则在几乎所有带配置的 CLI 工具里都成立
+
+---
+
+### 知识点 3：接口改动的连锁反应
+
+#### 现象
+`Scanner::scan` 从单参数改成双参数（加 skipHidden），所有调用它的地方都要改。
+
+#### 排查与原因
+- 类的公共接口是"契约"，改了契约所有调用方必须同步
+- 本项目中调用 `scanner_.scan()` 的是 Organizer 的 preview 和 execute 两处
+- 如果还有测试代码调用，也要一起改
+
+#### 解决方案
+```cpp
+// Scanner 声明
+ScanResult scan(const fs::path& dirPath, bool skipHidden);
+
+// Organizer 里所有调用点同步改
+scanner_.scan(targetDir, config_.skipHidden);
+scanner_.scan(sourceDir, config_.skipHidden);
+```
+
+#### 经验总结
+- 改公共接口前，先搜索所有调用点，评估影响范围（VS 里右键函数名 → 查找所有引用）
+- 接口设计要提前考虑变化点：skipHidden 这类行为开关一开始就该设计成参数
+- 连锁反应是"为什么接口要稳定"的原因，也是设计模式（如参数对象）的动力之一
+
+---
+
+### 知识点 4：类型对齐（Config 用 string，程序用 wstring）
+
+#### 现象
+题 8 的 `Config.ignoreSuffix`/`ignoreName` 是 `std::unordered_set<std::string>`，但程序里 `file.ext`/`file.fileName` 是 `std::wstring`，无法直接查表。
+
+#### 排查与原因
+- 题 5 定下的编码方案：文件名/后缀用 wstring（UTF-16，和 fs::path 零转换）
+- 题 8 写 Config 时用的 string（配置文件内容本来就是窄字符）
+- 两个类型不匹配，`filterIgnored` 里 `config_.ignoreSuffix.count(it->ext)` 编译不过
+
+#### 解决方案
+把 Config 的这两个字段改成 wstring 版本，loadConfig 插入时转换：
+```cpp
+struct Config {
+    std::unordered_set<std::wstring> ignoreSuffix;  // 和 file.ext 类型对齐
+    std::unordered_set<std::wstring> ignoreName;    // 和 file.fileName 类型对齐
+};
+
+// loadConfig 里
+config.ignoreSuffix.insert(std::wstring(s.begin(), s.end()));  // string → wstring
+```
+
+#### 经验总结
+- 跨模块协作时，类型必须对齐，否则接口接不上
+- string→wstring 简单转换：`std::wstring(s.begin(), s.end())`，对 ASCII 内容足够
+- 配置文件里的后缀/文件名一般就是 ASCII（.tmp、Thumbs.db），简单转换即可
+- 如果配置里要支持中文文件名，需要用 MultiByteToWideChar 按 UTF-8/GBK 正确转换
+
+---
+
+### 知识点 5：命令行选项解析的坑（--config 被误当目标目录）
+
+#### 现象
+验证时执行 `file_sorter --execute 源目录 --config 配置.ini`，程序把 `--config` 当成了目标目录，文件被移到了当前目录下一个名为 `--config` 的文件夹里。
+
+#### 排查与原因
+- main 里 execute 分支无条件取 `argv[3]` 作为目标目录
+- 但命令里 `argv[3]` 是 `--config`（选项标志），不是目标目录
+- 解析位置参数时，必须跳过选项（以 `--` 开头）的参数
+
+#### 解决方案
+```cpp
+fs::path targetDir;
+if (argc >= 4 && !std::string(argv[3]).starts_with("--")) {
+    targetDir = argv[3];  // 只有不以 -- 开头才当作目标目录
+}
+```
+
+#### 经验总结
+- 命令行解析时，位置参数（值）和选项参数（--xxx）要区分开
+- 取位置参数前先判断它是不是选项标志（以 `--` 开头）
+- 这类 bug 很难从代码里看出来，**一定要实际跑命令验证**
+- 这也是"验证比写代码更重要"的例证：编译通过 ≠ 行为正确
+
+---
+
+### 踩坑记录
+
+1. **三元表达式类型不兼容（E0415/E0042）** → `config.defaultTarget.empty() ? "" : fs::path(...).u8string()` 里 `""` 是 `const char*`，`u8string()` 是 `std::u8string`（C++20 `char8_t`），不能混用。修复：拆成 if-else + `std::string` 变量，避免三元表达式里的类型推导冲突。
+2. **--config 被误当目标目录** → `--execute 源 --config 配置` 时 `argv[3]="--config"` 被当成目标目录，文件移到当前目录的 `--config` 文件夹。修复：`argv[3]` 以 `--` 开头时不作为目标目录。
+3. **Config 类型不匹配** → `ignoreSuffix`/`ignoreName` 用 string，程序里 `file.ext` 是 wstring，无法直接 count 查表。修复：Config 字段改 wstring，loadConfig 插入时 string→wstring。
+4. **目标目录可选后 argc 校验没同步改** → 原来要求 argc>=4，现在目标目录可选只需 argc>=3，否则合法的 `--execute 源 --config 配置` 会提前报错。
+
+---
+
+### 最终验证输出
+
+**4 个测试全部通过：**
+
+| 测试 | 场景 | 结果 |
+|---|---|---|
+| 1 | --preview + skip_hidden=false + 忽略 .tmp/.log/Thumbs.db | ✅ 3 个文件，忽略的全被过滤 |
+| 2 | --execute 不带目标目录 → 回退 default_target | ✅ 文件移到配置路径，source 只剩忽略文件 |
+| 3 | --execute 显式传目标目录 | ✅ 显式目录生效 |
+| 4 | skip_hidden=true | ✅ .hidden.txt 被跳过（跳过数 1） |
+
+```
+===== 测试1: preview =====
+预览模式：扫描 ...\source
+总文件数: 3
+跳过: 0
+分类统计:
+  图片: 1
+  文档: 2
+  ...
+
+===== 测试2: execute 回退 default_target =====
+执行模式：从 ...\source 移动到 ...\target
+总文件数: 3
+成功移动: 3
+移动失败: 0
+source 剩余: a.tmp b.log Thumbs.db  ← 只剩被忽略的文件
+```
+
+（期间发现并修复 `--config` 被误当目标目录的 bug，重新编译后 4 个测试全部通过）
