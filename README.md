@@ -1,76 +1,36 @@
-# README.md
-## Hi there 👋
-<!--
-同名个人仓库，仅存放各类开发项目踩坑文档，不包含任何项目源代码
-所有故障记录分类归档在 docs 目录下，便于后续查阅复用
--->
-### 关于我
-- 计算机专业学生，对系统编程、安全与游戏开发领域感兴趣
-- 主要技术栈：C/C++、Python、前端
-- 兴趣：系统编程、逆向分析、漏洞挖掘、游戏开发
-- 本仓库用于归档开发过程中遇到的各类踩坑记录
+# 👋 Hi, I'm 半夏未央
 
-### 仓库介绍
-本仓库是个人全开发场景踩坑归档库，**只存储各类项目故障记录文档，无任何业务源码、工程文件**。
-收录内容涵盖 C++ 图形可视化、前端、算法、编译环境、包管理器、多线程、VS 开发环境等各类开发踩坑，用于复盘、避坑、查阅解决方案。
+计算机专业学生，对 **系统编程、网络安全、游戏开发** 方向感兴趣。
+主要写 C/C++，也用 Python 和前端，习惯把踩过的坑记下来归档。
 
-### 仓库目录结构
-```
-.
-├── docs/
-│   ├── sort-raylib/
-│   │   └── bug_record.md   # C++ Raylib 排序算法可视化项目完整踩坑记录
-│   ├── 通用环境踩坑.md      # 跨项目通用环境、工具类故障记录
-│   ├── file_sorter实操题经验.md  # file_sorter 项目递进式实操题知识点与经验总结
-│   └── 其他项目文件夹/      # 后续新增项目踩坑单独建文件夹存放
-├── .gitignore               # 仓库忽略规则
-└── README.md                # 仓库总介绍
-```
+---
 
-### 当前已收录文档简介
-#### 1. sort-raylib 排序可视化项目文档
-文档路径：`docs/sort-raylib/bug_record.md`
-1. 项目：C++ + Raylib 排序算法可视化工具，支持冒泡/选择/插入/快排/归并动画，多线程渲染
-2. 编译环境：Visual Studio 2026 MSVC x64 Debug
-3. 核心故障：vcpkg 打包 raylib 6.x 与 VS2026 MSVC 运行不兼容（白屏、窗口卡死、鼠标转圈）
-4. 配套内容：核心根因、无卸载vcpkg的修复方案、四类连锁衍生故障、完整开发总结
+## 🌱 开源贡献
 
-#### 2. 通用环境踩坑记录
-文档路径：`docs/通用环境踩坑.md`
-1. C++ 头文件包含路径错误（无法打开包括文件 / 附加包含目录设置）
-2. 文件行尾不一致（LF vs CRLF / 批量标准化）
-3. 源码编码与中文乱码（UTF-8 BOM / /utf-8 编译选项）
-4. .gitignore 误配置导致所有文件被忽略（.gitignore vs .gitattributes 语法区分）
+- **[py-simple-wrap #328](https://github.com/sara-czasak/py-simple-wrap/pull/328)** — 为 `easy_random` 模块新增 `random_color()` 工具函数及单元测试，PR 已合并进 main，收录于项目 [CONTRIBUTORS.md](https://github.com/sara-czasak/py-simple-wrap/blob/main/CONTRIBUTORS.md)
+- **[stdlib-js #15179](https://github.com/stdlib-js/stdlib/pull/15179)** — 修复 lint 错误（审核中）
 
-#### 3. file_sorter 实操题经验总结
-文档路径：`docs/file_sorter实操题经验.md`
-1. 题 1：FileInfo 信息打印器 — 格式化函数职责分离（ostringstream 返回字符串）、C++ 时间类型转换 4 步走（file_time_type → time_point → time_t → tm → 字符串）、static_cast vs C 风格强制转换
-2. 题 2：分级日志系统 — enum class 作用域枚举必须加类名前缀、Windows.h 宏冲突与 #undef、便捷函数封装核心函数、当前时间获取比文件时间少一步转换
-3. 题 3：目录扫描器 — std::filesystem 目录遍历、隐藏文件判断与越界防护、异常隔离、fs::path 编码坑（string()=GBK / u8string()=UTF-8）、完整 UTF-8 方案三步（/utf-8 + SetConsoleOutputCP + u8string）、std::u8string 与 C++17/C++20 差异、clog vs cout vs cerr
-4. 题 4：后缀分类器 — 后缀标准化（去点+转小写）、分类规则表集中管理（unordered_map + static const 单例）、enum class 转中文（switch）、默认值处理（未知后缀返回 OTHER）、char 是基本类型没有成员方法
-5. 题 5：文件移动器 — fs::create_directories 递归创建目录、重名处理逻辑（stem/ext 拆解 + while 循环）、字符串拼接中的隐式转换（string+const char* → string → fs::path 构造、GBK 自洽性）、fs::rename 移动文件（同分区原子/跨分区先复制后删除）、异常隔离、Windows 编码三层架构（fs::path 存路径/wstring 存文件名/u8string 转显示）、安全教训（fs::remove_all 误删桌面文件，测试目录必须加安全检查）
-6. 题 6：编排器 Organizer — 组合模式（持有 Scanner/Classifier/Mover 成员对象，组合优于继承）、双模式代码复用（预览和执行共享扫描+分类逻辑）、报告结构体而非直接打印（数据与展示分离）、源目录和目标目录分离（execute 双参数设计）、聚合初始化（return {true, L""} 省略类型名）、std::distance 计算迭代器间距、静态分析警告（C6001/C26495 不是真正的错误）、SetConsoleOutputCP + wcout 不兼容（UTF-8 控制台对宽字符输出有 bug）
-7. 题 7：命令行参数解析 + main 入口整合 — argc/argv 命令行参数解析（argc=参数个数含程序名、argv[0]=程序名）、main 函数是入口不写业务逻辑（只做参数解析+校验+调用+返回退出码）、参数校验前置（参数数量/目录存在性/路径类型在调用业务前校验）、退出码的意义（0=成功/1=参数错误/2=执行失败）、帮助信息是用户体验的一部分（参数错误时自动显示帮助）、命令行参数的中文编码问题（argv 是 GBK 编码，用 fs::path 接收自动转 UTF-16，显示用 u8string）、模块整合（把题1-6模块按依赖顺序组装成完整可运行程序）
-8. 题 8：配置文件读取器 — std::ifstream 逐行读取文件、INI 格式解析（状态机思路：currentSection 状态变量、空行/注释/节标题/键值对四种行类型）、字符串处理三件套（trim 去首尾空格/split 按分隔符分割/parseBool 解析布尔值支持多种写法）、默认值设计（配置缺失不崩溃，结构体字段给默认值，配置文件不存在返回全默认值）、配置与代码分离（改配置不需要重新编译，分类规则/忽略列表放配置文件）、substr 和 find 用法（find 返回从0开始的索引找不到返回npos，substr 第二个参数是长度不是结束位置）
-9. 题 9：配置文件接入 — 配置注入（依赖注入雏形，Organizer 构造接收 Config，业务模块不自读配置）、参数优先级（命令行 > 配置文件 > 默认值，execute 目标目录回退 default_target）、接口改动连锁反应（scan 加 skipHidden 参数后所有调用点同步改）、类型对齐（Config 的 ignore 集合从 string 改 wstring 与 FileInfo 匹配）、命令行选项解析的坑（--config 被 argv[3] 误当目标目录误建文件夹，选项参数以 -- 开头要跳过）
+---
 
-### 仓库使用规范
-1. 每个新项目踩坑单独在 `docs/` 下新建同名文件夹，内部存放该项目专属 `bug_record.md`；
-2. 通用、跨项目的环境/工具故障单独写通用文档，不归属单一项目；
-3. 文档统一格式：项目背景、环境依赖、核心坑、衍生坑、根因、解决方案、经验总结；
-4. 仓库不提交任何代码、解决方案、编译产物，仅保留 Markdown 文字记录。
+## 📂 个人项目
 
-### 适用人群
-- C++ / Windows MSVC / Raylib 图形开发
-- vcpkg 包管理器环境配置
-- 多线程动画、可视化程序开发
-- 各类编译、链接、运行时故障排查参考
+- **file_sorter** — C++ 文件自动分类整理工具，命令行版，支持后缀分类、重名处理、配置文件注入、预览/执行双模式
+- **sort-raylib** — C++ + Raylib 排序算法可视化，支持冒泡/选择/插入/快排/归并动画，多线程渲染（踩坑记录见下方文档）
 
-### .gitignore
-- [.gitignore](.gitignore)
+---
 
-## 文档快速跳转
-- [Raylib排序可视化项目踩坑文档](./docs/sort-raylib/bug_record.md)
-- [通用环境踩坑记录](./docs/通用环境踩坑.md)
-- [file_sorter 实操题经验总结](./docs/file_sorter实操题经验.md)
-- 后续新增项目文档会在此处补充链接
+## 🛠 技术栈
+
+- **语言**：C/C++（C++20）、Python、JavaScript/HTML/CSS
+- **工具**：Git、CMake、Visual Studio、vcpkg
+- **方向**：系统编程、文件处理、图形可视化
+
+---
+
+## 📚 踩坑文档归档
+
+本仓库用于归档开发过程中遇到的各类踩坑记录，方便复盘查阅：
+
+- [Raylib 排序可视化项目踩坑文档](./docs/sort-raylib/bug_record.md) — vcpkg 与 MSVC 不兼容、白屏、多线程渲染
+- [通用环境踩坑记录](./docs/通用环境踩坑.md) — 头文件路径、LF/CRLF、中文乱码、.gitignore 误配置
+- [file_sorter 实操题经验总结](./docs/file_sorter实操题经验.md) — C++ 工程化递进练习（10 题）：日志、扫描、分类、移动、配置注入、命令行解析
