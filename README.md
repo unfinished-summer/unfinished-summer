@@ -8,7 +8,6 @@
 ## 🌱 开源贡献
 
 - **[py-simple-wrap #328](https://github.com/sara-czasak/py-simple-wrap/pull/328)** — 为 `easy_random` 模块新增 `random_color()` 工具函数及单元测试，PR 已合并进 main，收录于项目 [CONTRIBUTORS.md](https://github.com/sara-czasak/py-simple-wrap/blob/main/CONTRIBUTORS.md)
-- **[stdlib-js #15179](https://github.com/stdlib-js/stdlib/pull/15179)** — 修复 lint 错误（审核中）
 
 ---
 
