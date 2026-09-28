@@ -8,6 +8,8 @@
 ## 🌱 开源贡献
 
 - **[py-simple-wrap #328](https://github.com/sara-czasak/py-simple-wrap/pull/328)** — 为 `easy_random` 模块新增 `random_color()` 工具函数及单元测试，PR 已合并进 main，收录于项目 [CONTRIBUTORS.md](https://github.com/sara-czasak/py-simple-wrap/blob/main/CONTRIBUTORS.md)
+- **[yasbd-lib #341](https://github.com/speedyk-005/yasbd-lib/pull/341)** — 为中文新闻场景新增关键词句子提取示例（`examples/keyword_sentence_extraction.py`），PR 已合并进 main，收录于项目 [CONTRIBUTORS.md](https://github.com/speedyk-005/yasbd-lib/blob/main/CONTRIBUTORS.md)
+- **[yasbd-lib #344](https://github.com/speedyk-005/yasbd-lib/pull/344)** — 修复 Windows 下 `uv lock` 因 `sentsplit` 构建失败导致的 UnicodeDecodeError（`pyproject.toml` 环境标记），PR 已通过全部 8 项检查，等待合并
 
 ---
 
